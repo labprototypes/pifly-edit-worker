@@ -1,0 +1,7 @@
+replicate
+redis
+requests
+Pillow
+boto3
+Flask-SQLAlchemy
+psycopg2-binary

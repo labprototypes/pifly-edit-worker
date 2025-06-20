@@ -153,27 +153,26 @@ def process_job(job_data, db_session):
 # --- ОСНОВНОЙ ЦИКЛ ВОРКЕРА ---
 
 def main():
-    print(">>> Воркер PiflyEdit запущен и ожидает задач...")
-    redis_client = redis.from_url(REDIS_URL)
-    
-    # Создаем сессию БД для использования в цикле
-    Session = sessionmaker(bind=db.engine)
-    
-    while True:
-        try:
-            # Ожидаем задачу из очереди 'pifly_edit_jobs'
-            # brpop - блокирующая операция, воркер будет "спать", пока нет задач
-            _, job_json = redis_client.brpop('pifly_edit_jobs')
-            job_data = json.loads(job_json)
-            
-            # Создаем новую сессию для каждой задачи, чтобы избежать проблем с подключением
-            session = Session()
-            process_job(job_data, session)
-            session.close()
+    # Эта команда "открывает двери" в офис для нашего воркера
+    with app.app_context():
+        # Весь остальной код теперь сдвинут вправо (имеет отступ)
+        print(">>> Воркер PiflyEdit запущен и ожидает задач...")
+        redis_client = redis.from_url(REDIS_URL)
+        
+        Session = sessionmaker(bind=db.engine)
+        
+        while True:
+            try:
+                _, job_json = redis_client.brpop('pifly_edit_jobs')
+                job_data = json.loads(job_json)
+                
+                session = Session()
+                process_job(job_data, session)
+                session.close()
 
-        except Exception as e:
-            print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в основном цикле воркера: {e}")
-            time.sleep(5) # Ждем 5 секунд перед следующей попыткой
+            except Exception as e:
+                print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в основном цикле воркера: {e}")
+                time.sleep(5)
 
 if __name__ == "__main__":
     main()

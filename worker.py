@@ -45,17 +45,32 @@ def run_replicate_model(version, input_data, description):
     print(f"<- Модель '{description}' успешно завершена.")
     return prediction.output
 
+# --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ composite_images ---
+
 def composite_images(original_url, upscaled_url, mask_url):
     print("-> Начало композитинга изображений...")
     try:
         original_img = Image.open(requests.get(original_url, stream=True).raw).convert("RGBA")
         upscaled_img = Image.open(requests.get(upscaled_url, stream=True).raw).convert("RGBA")
         mask_img = Image.open(requests.get(mask_url, stream=True).raw).convert("L")
-        upscaled_img = upscaled_img.resize(original_img.size, Image.LANCZOS)
-        final_img = Image.composite(upscaled_img, original_img, mask_img)
+
+        # ИСПРАВЛЕНИЕ: Мы должны работать в одном разрешении.
+        # Увеличиваем маску до размера апскейл-картинки
+        high_res_mask = mask_img.resize(upscaled_img.size, Image.LANCZOS)
+        
+        # Увеличиваем оригинальное изображение, чтобы оно стало фоном для апскейл-патча
+        high_res_original = original_img.resize(upscaled_img.size, Image.LANCZOS)
+
+        # "Наклеиваем" новую высококачественную часть на высококачественный фон по маске
+        high_res_final = Image.composite(upscaled_img, high_res_original, high_res_mask)
+        
+        # Теперь уменьшаем результат до исходного размера, чтобы соответствовать требованиям
+        final_image = high_res_final.resize(original_img.size, Image.LANCZOS)
+
         image_data = io.BytesIO()
-        final_img.save(image_data, format='PNG')
+        final_image.save(image_data, format='PNG')
         image_data.seek(0)
+        
         print("<- Композитинг успешно завершен.")
         return image_data
     except Exception as e:

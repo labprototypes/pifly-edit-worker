@@ -94,6 +94,8 @@ def upload_to_s3(image_data, user_id, prediction_id):
     print(f"<- Результат сохранен в S3: {permanent_s3_url}")
     return permanent_s3_url
 
+### НАЧАЛО БЛОКА ДЛЯ ЗАМЕНЫ ФУНКЦИИ ###
+
 def process_job(job_data, db_session):
     """Основная логика обработки одной задачи."""
     prediction_id = job_data['prediction_id']
@@ -106,16 +108,27 @@ def process_job(job_data, db_session):
             {"input_image": job_data['original_s3_url'], "prompt": job_data['prompt']},
             "FLUX Edit"
         )
-        generated_image_url = flux_output
+        # ОТЛАДКА: Печатаем результат от FLUX
+        print(f"!!! РЕЗУЛЬТАТ FLUX: {flux_output}")
+        # ИСПРАВЛЕНИЕ: Некоторые модели возвращают список, поэтому берем первый элемент.
+        generated_image_url = flux_output[0] if isinstance(flux_output, list) else flux_output
+        print(f"   -> Используем URL для следующих шагов: {generated_image_url}")
+
 
         # Шаг 2: Создание маски измененной области с помощью SAM
-        # Для SAM нужен короткий промпт, описывающий измененный объект. Берем его из основного промпта.
         mask_output = run_replicate_model(
             SAM_MODEL_VERSION,
             {"image": generated_image_url, "prompt": job_data['prompt']},
             "SAM Masking"
         )
+        # ОТЛАДКА: Печатаем результат от SAM
+        print(f"!!! РЕЗУЛЬТАТ SAM: {mask_output}")
+        # ИСПРАВЛЕНИЕ: Убеждаемся, что получили словарь с ключом 'mask'
+        if not isinstance(mask_output, dict) or 'mask' not in mask_output:
+            raise Exception(f"Неожиданный формат ответа от модели SAM: {mask_output}")
         mask_url = mask_output['mask']
+        print(f"   -> Используем URL маски: {mask_url}")
+
 
         # Шаг 3: Апскейл сгенерированного изображения
         upscaled_output = run_replicate_model(
@@ -123,7 +136,12 @@ def process_job(job_data, db_session):
             {"image": generated_image_url},
             "Upscaler"
         )
-        upscaled_image_url = upscaled_output
+        # ОТЛАДКА: Печатаем результат от Upscaler
+        print(f"!!! РЕЗУЛЬТАТ UPSCALER: {upscaled_output}")
+        # ИСПРАВЛЕНИЕ: Некоторые модели возвращают список, поэтому берем первый элемент.
+        upscaled_image_url = upscaled_output[0] if isinstance(upscaled_output, list) else upscaled_output
+        print(f"   -> Используем URL апскейла: {upscaled_image_url}")
+
 
         # Шаг 4: Композитинг
         final_image_data = composite_images(job_data['original_s3_url'], upscaled_image_url, mask_url)
@@ -140,7 +158,6 @@ def process_job(job_data, db_session):
 
     except Exception as e:
         print(f"!!! ОШИБКА при обработке задачи {prediction_id}: {e}")
-        # Обновляем запись в БД со статусом 'failed' и возвращаем токены
         prediction = db_session.query(Prediction).get(prediction_id)
         if prediction:
             prediction.status = 'failed'
@@ -149,6 +166,8 @@ def process_job(job_data, db_session):
                 user.token_balance += prediction.token_cost
                 print(f"Возвращено {prediction.token_cost} токенов пользователю {user.id}")
             db_session.commit()
+
+### КОНЕЦ БЛОКА ДЛЯ ЗАМЕНЫ ФУНКЦИИ ###
 
 # --- ОСНОВНОЙ ЦИКЛ ВОРКЕРА ---
 

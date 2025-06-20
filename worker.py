@@ -84,62 +84,40 @@ def upload_to_s3(image_data, user_id, prediction_id):
 ### НАЧАЛО БЛОКА ДЛЯ ЗАМЕНЫ ФУНКЦИИ ###
 
 def process_job(job_data, db_session):
-    """Основная логика обработки одной задачи."""
+    """УПРОЩЕННАЯ ВЕРСИЯ ДЛЯ ТЕСТИРОВАНИЯ"""
     prediction_id = job_data['prediction_id']
-    # --- ИСПРАВЛЕННАЯ ВЕРСИЯ МОДЕЛИ ---
-    SAM_MODEL_VERSION_FIXED = "lucataco/segment-anything-2:722340f0e15369c474075BF4793c12f4625f383a1526cc40d499255a6"
-
-    print(f"--- Начало обработки задачи {prediction_id} ---")
+    print(f"--- НАЧАЛО УПРОЩЕННОЙ ОБРАБОТКИ ЗАДАЧИ {prediction_id} ---")
     
     try:
-        # Шаг 1: Генерация измененного изображения с помощью FLUX
+        # --- ШАГ 1: ТОЛЬКО ГЕНЕРАЦИЯ FLUX ---
+        print("-> Запуск модели 'FLUX Edit'...")
         flux_output = run_replicate_model(
             FLUX_MODEL_VERSION,
             {"input_image": job_data['original_s3_url'], "prompt": job_data['prompt']},
             "FLUX Edit"
         )
+        print(f"<- Модель 'FLUX Edit' успешно завершена.")
         generated_image_url = flux_output[0] if isinstance(flux_output, list) else flux_output
-        print(f"   -> FLUX URL: {generated_image_url}")
+        print(f"   -> Получен URL результата: {generated_image_url}")
 
-
-        # Шаг 2: Создание маски с помощью правильной модели, которую вы нашли
-        mask_output = run_replicate_model(
-            SAM_MODEL_VERSION_FIXED, # Используем исправленную версию
-            {"image": generated_image_url, "prompt": job_data['prompt']},
-            "SAM Masking (v2)"
-        )
-        print(f"!!! РЕЗУЛЬТАТ SAM-2: {mask_output}")
-        # ИСПРАВЛЕНИЕ: Эта модель возвращает список, берем первый элемент
-        mask_url = mask_output[0] if isinstance(mask_output, list) else mask_output
-        print(f"   -> MASK URL: {mask_url}")
-
-
-        # Шаг 3: Апскейл сгенерированного изображения
-        upscaled_output = run_replicate_model(
-            UPSCALER_MODEL_VERSION,
-            {"image": generated_image_url},
-            "Upscaler"
-        )
-        upscaled_image_url = upscaled_output[0] if isinstance(upscaled_output, list) else upscaled_output
-        print(f"   -> UPSCALE URL: {upscaled_image_url}")
-
-
-        # Шаг 4: Композитинг
-        final_image_data = composite_images(job_data['original_s3_url'], upscaled_image_url, mask_url)
+        # --- ШАГ 2: СКАЧИВАЕМ РЕЗУЛЬТАТ И СРАЗУ ЗАГРУЖАЕМ В S3 ---
+        print("-> Скачиваем результат от Replicate...")
+        image_response = requests.get(generated_image_url, stream=True)
+        image_response.raise_for_status()
+        final_image_data = io.BytesIO(image_response.content)
         
-        # Шаг 5: Загрузка результата в наш S3
         final_s3_url = upload_to_s3(final_image_data, job_data['user_id'], prediction_id)
-
-        # Шаг 6: Обновляем запись в БД со статусом 'completed'
+        
+        # --- ШАГ 3: ОБНОВЛЯЕМ БД ---
         prediction = db_session.query(Prediction).get(prediction_id)
         if prediction:
             prediction.status = 'completed'
             prediction.output_url = final_s3_url
             db_session.commit()
-            print(f"--- Задача {prediction_id} успешно завершена! ---")
+            print(f"--- УПРОЩЕННАЯ ЗАДАЧА {prediction_id} УСПЕШНО ЗАВЕРШЕНА! ---")
 
     except Exception as e:
-        print(f"!!! ОШИБКА при обработке задачи {prediction_id}:")
+        print(f"!!! ОШИБКА при обработке УПРОЩЕННОЙ задачи {prediction_id}:")
         traceback.print_exc()
         prediction = db_session.query(Prediction).get(prediction_id)
         if prediction:

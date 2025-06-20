@@ -5,6 +5,7 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import sessionmaker
 from PIL import Image
+import replicate
 
 DATABASE_URL = os.environ.get('DATABASE_URL')
 REDIS_URL = os.environ.get('REDIS_URL')

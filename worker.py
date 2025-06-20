@@ -26,7 +26,7 @@ AWS_S3_REGION = os.environ.get('AWS_S3_REGION')
 
 # --- МОДЕЛИ REPLICATE ---
 FLUX_MODEL_VERSION = "black-forest-labs/flux-kontext-max:0b9c317b23e79a9a0d8b9602ff4d04030d433055927fb7c4b91c44234a6818c4"
-SAM_MODEL_VERSION = "lucataco/segment-anything:50700142f7c65c697816f15779743c36691a03f8f94e9b95764790409a67c446"
+SAM_MODEL_VERSION = "lucataco/segment-anything:95764790409a67c4461e5af75155554d3d7d74b8303f277a9416568a9947761b"
 UPSCALER_MODEL_VERSION = "nightmareai/real-esrgan:42fed1c4974146d4d2414e2be2c5277c5fcf05f45d25456d209595473143a84F"
 
 # --- ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ ---

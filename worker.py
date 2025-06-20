@@ -28,7 +28,7 @@ AWS_S3_REGION = os.environ.get('AWS_S3_REGION')
 # --- МОДЕЛИ REPLICATE ---
 FLUX_MODEL_VERSION = "black-forest-labs/flux-kontext-max:0b9c317b23e79a9a0d8b9602ff4d04030d433055927fb7c4b91c44234a6818c4"
 # Мы все еще пытаемся использовать правильную версию SAM
-SAM_MODEL_VERSION = "lucataco/segment-anything-2:be7cbde9fdf0eecdc8b20ffec9dd0d1cfeace0832d4d0b58a071d993182e1be0"
+SAM_MODEL_VERSION = "tmappdev/lang-segment-anything:46424b33633644367f035f29d7249911e3b5e91a033526f8d7441a7e4683a45c"
 UPSCALER_MODEL_VERSION = "philz1337x/clarity-upscaler:4a3b865f34246b3254921612450410657993a40d24955b273413cb02526715b5"
 
 # --- ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ ---
@@ -125,7 +125,6 @@ def process_job(job_data, db_session):
         # Шаг 2: Создание маски (используем правильную модель и правильный параметр)
         sam_input = {"image": generated_image_url, "text_prompt": job_data['prompt']}
         mask_output = run_replicate_model(SAM_MODEL_VERSION, sam_input, "Lang-SAM Masking")
-        mask_url = mask_output[0] if isinstance(mask_output, list) else mask_output
 
         # Шаг 3: Апскейл
         upscaled_output = run_replicate_model(UPSCALER_MODEL_VERSION, {"image": generated_image_url}, "Upscaler")

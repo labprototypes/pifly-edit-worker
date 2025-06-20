@@ -50,30 +50,6 @@ class Prediction(db.Model):
     token_cost = db.Column(db.Integer, nullable=False)
 
 # --- ФУНКЦИИ-ПОМОЩНИКИ ---
-def composite_images(original_url, upscaled_url, mask_url):
-    print("-> Начало композитинга изображений...")
-    try:
-        original_img = Image.open(requests.get(original_url, stream=True).raw).convert("RGBA")
-        upscaled_img = Image.open(requests.get(upscaled_url, stream=True).raw).convert("RGBA")
-        mask_img = Image.open(requests.get(mask_url, stream=True).raw).convert("L")
-        upscaled_img = upscaled_img.resize(original_img.size, Image.LANCZOS)
-        final_img = Image.composite(upscaled_img, original_img, mask_img)
-        image_data = io.BytesIO()
-        final_img.save(image_data, format='PNG')
-        image_data.seek(0)
-        print("<- Композитинг успешно завершен.")
-        return image_data
-    except Exception as e:
-        raise Exception(f"Ошибка на этапе композитинга: {e}")
-
-def run_replicate_model(version, input_data, description):
-    print(f"-> Запуск модели '{description}'...")
-    prediction = replicate.predictions.create(version=version, input=input_data)
-    prediction.wait()
-    if prediction.status != 'succeeded':
-        raise Exception(f"Модель '{description}' не удалась со статусом {prediction.status}. Ошибка: {prediction.error}")
-    print(f"<- Модель '{description}' успешно завершена.")
-    return prediction.output
 
 def composite_images(original_url, upscaled_url, mask_url):
     # ... (эта функция остается без изменений) ...
@@ -114,6 +90,8 @@ def upload_to_s3(image_data, user_id, prediction_id):
 
 # --- ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ---
 # --- ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ (ИСПРАВЛЕНА И УПРОЩЕНА) ---
+# --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ PROCESS_JOB ---
+
 def process_job(job_data, db_session):
     prediction_id = job_data['prediction_id']
     print(f"--- Начало обработки задачи {prediction_id} ---")
@@ -125,8 +103,11 @@ def process_job(job_data, db_session):
         # Шаг 2: Создание маски (используем правильную модель и правильный параметр)
         sam_input = {"image": generated_image_url, "text_prompt": job_data['mask_prompt']}
         mask_output = run_replicate_model(SAM_MODEL_VERSION, sam_input, "Lang-SAM Masking")
+        
+        # ИСПРАВЛЕНИЕ: Добавлена недостающая строка для сохранения результата маски
+        mask_url = mask_output[0] if isinstance(mask_output, list) else mask_output
 
-        # Шаг 3: Апскейл
+        # Шаг 3: Апскейл (используем вашу модель)
         upscaled_output = run_replicate_model(UPSCALER_MODEL_VERSION, {"image": generated_image_url}, "Upscaler")
         upscaled_image_url = upscaled_output[0] if isinstance(upscaled_output, list) else upscaled_output
 
@@ -137,24 +118,24 @@ def process_job(job_data, db_session):
         final_s3_url = upload_to_s3(final_image_data, job_data['user_id'], prediction_id)
 
         # Шаг 6: Обновляем запись в БД
-        prediction = db_session.query(Prediction).get(prediction_id)
+        prediction = db.session.get(Prediction, prediction_id) # Используем новый синтаксис Session.get()
         if prediction:
             prediction.status = 'completed'
             prediction.output_url = final_s3_url
-            db_session.commit()
+            db.session.commit()
             print(f"--- ПОЛНАЯ ЗАДАЧА {prediction_id} УСПЕШНО ЗАВЕРШЕНА! ---")
 
     except Exception as e:
         print(f"!!! ОШИБКА при обработке задачи {prediction_id}:")
         traceback.print_exc()
-        prediction = db_session.query(Prediction).get(prediction_id)
+        prediction = db.session.get(Prediction, prediction_id) # Используем новый синтаксис Session.get()
         if prediction:
             prediction.status = 'failed'
-            user = db_session.query(User).get(prediction.user_id)
+            user = db.session.get(User, prediction.user_id) # Используем новый синтаксис Session.get()
             if user:
                 user.token_balance += prediction.token_cost
                 print(f"Возвращено {prediction.token_cost} токенов пользователю {user.id}")
-            db_session.commit()
+            db.session.commit()
 
 # --- ОСНОВНОЙ ЦИКЛ ВОРКЕРА ---
 def main():

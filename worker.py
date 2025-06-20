@@ -36,12 +36,34 @@ class Prediction(db.Model):
     output_url = db.Column(db.String(2048), nullable=True)
     token_cost = db.Column(db.Integer, nullable=False)
 
+# --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ run_replicate_model ---
+
 def run_replicate_model(version, input_data, description):
+    """Запускает модель и активно опрашивает ее статус вместо пассивного ожидания."""
     print(f"-> Запуск модели '{description}'...")
+    
+    # Создаем предсказание
     prediction = replicate.predictions.create(version=version, input=input_data)
-    prediction.wait()
+    print(f"   -> Replicate задача создана с ID: {prediction.id}")
+
+    start_time = time.time()
+    # Устанавливаем максимальное время ожидания, например, 5 минут (300 секунд)
+    timeout = 300 
+
+    while prediction.status not in ["succeeded", "failed", "canceled"]:
+        # Проверяем, не вышли ли мы за таймаут
+        if time.time() - start_time > timeout:
+            raise Exception(f"Модель '{description}' не завершилась за {timeout} секунд (таймаут).")
+
+        # Ждем 2 секунды перед следующим запросом
+        time.sleep(2)
+        # Обновляем статус предсказания
+        prediction.reload()
+        print(f"   -> Проверка статуса для '{description}': {prediction.status}")
+
     if prediction.status != 'succeeded':
         raise Exception(f"Модель '{description}' не удалась со статусом {prediction.status}. Ошибка: {prediction.error}")
+
     print(f"<- Модель '{description}' успешно завершена.")
     return prediction.output
 

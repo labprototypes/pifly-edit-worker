@@ -1,4 +1,4 @@
-# worker.py - ФИНАЛЬНАЯ ВЕРСИЯ
+### НАЧАЛО: КОД ДЛЯ ПОЛНОЙ ЗАМЕНЫ ФАЙЛА WORKER.PY ###
 
 import os
 import time
@@ -6,6 +6,7 @@ import json
 import requests
 import io
 import traceback
+import uuid
 
 import replicate
 import redis
@@ -26,7 +27,8 @@ AWS_S3_REGION = os.environ.get('AWS_S3_REGION')
 
 # --- МОДЕЛИ REPLICATE ---
 FLUX_MODEL_VERSION = "black-forest-labs/flux-kontext-max:0b9c317b23e79a9a0d8b9602ff4d04030d433055927fb7c4b91c44234a6818c4"
-SAM_MODEL_VERSION = "lucataco/segment-anything:95764790409a67c4461e5af75155554d3d7d74b8303f277a9416568a9947761b"
+# Мы все еще пытаемся использовать правильную версию SAM
+SAM_MODEL_VERSION = "lucataco/segment-anything-2:722340f0e15369c474075BF4793c12f4625f383a1526cc40d499255a6"
 UPSCALER_MODEL_VERSION = "nightmareai/real-esrgan:42fed1c4974146d4d2414e2be2c5277c5fcf05f45d25456d209595473143a84F"
 
 # --- ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ ---
@@ -35,6 +37,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
+# --- МОДЕЛИ БД ---
 class User(db.Model):
     id = db.Column(db.String(128), primary_key=True)
     token_balance = db.Column(db.Integer, nullable=False)
@@ -56,7 +59,27 @@ def run_replicate_model(version, input_data, description):
     print(f"<- Модель '{description}' успешно завершена.")
     return prediction.output
 
+def download_and_reupload_to_s3(source_url, user_id, prediction_id, step_name):
+    """Скачивает файл с временного URL и перезаливает в наш S3."""
+    print(f"-> Скачиваем промежуточный результат ({step_name})...")
+    response = requests.get(source_url, stream=True)
+    response.raise_for_status()
+    
+    file_data = io.BytesIO(response.content)
+    content_type = response.headers.get('Content-Type', 'image/png')
+    
+    s3_client = boto3.client('s3', region_name=AWS_S3_REGION, aws_access_key_id=AWS_ACCESS_KEY_ID, aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+    
+    object_name = f"generations/{user_id}/{prediction_id}-{step_name}-{uuid.uuid4().hex[:6]}.png"
+    
+    s3_client.upload_fileobj(file_data, AWS_S3_BUCKET_NAME, object_name, ExtraArgs={'ContentType': content_type})
+    
+    permanent_s3_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION}.amazonaws.com/{object_name}"
+    print(f"<- Промежуточный результат ({step_name}) сохранен в S3: {permanent_s3_url}")
+    return permanent_s3_url
+
 def composite_images(original_url, upscaled_url, mask_url):
+    # ... (эта функция остается без изменений) ...
     print("-> Начало композитинга изображений...")
     try:
         original_img = Image.open(requests.get(original_url, stream=True).raw).convert("RGBA")
@@ -72,52 +95,60 @@ def composite_images(original_url, upscaled_url, mask_url):
     except Exception as e:
         raise Exception(f"Ошибка на этапе композитинга: {e}")
 
-def upload_to_s3(image_data, user_id, prediction_id):
-    print("-> Загрузка финального результата в S3...")
+def upload_final_to_s3(image_data, user_id, prediction_id):
+    # ... (переименовали для ясности) ...
+    print("-> Загрузка ФИНАЛЬНОГО результата в S3...")
     s3_client = boto3.client('s3', region_name=AWS_S3_REGION, aws_access_key_id=AWS_ACCESS_KEY_ID, aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
-    object_name = f"generations/{user_id}/{prediction_id}.png"
+    object_name = f"generations/{user_id}/{prediction_id}-final.png"
     s3_client.upload_fileobj(image_data, AWS_S3_BUCKET_NAME, object_name, ExtraArgs={'ContentType': 'image/png'})
     permanent_s3_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION}.amazonaws.com/{object_name}"
-    print(f"<- Результат сохранен в S3: {permanent_s3_url}")
+    print(f"<- Финальный результат сохранен в S3: {permanent_s3_url}")
     return permanent_s3_url
 
-### НАЧАЛО БЛОКА ДЛЯ ЗАМЕНЫ ФУНКЦИИ ###
-
+# --- ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ---
 def process_job(job_data, db_session):
-    """УПРОЩЕННАЯ ВЕРСИЯ ДЛЯ ТЕСТИРОВАНИЯ"""
     prediction_id = job_data['prediction_id']
-    print(f"--- НАЧАЛО УПРОЩЕННОЙ ОБРАБОТКИ ЗАДАЧИ {prediction_id} ---")
+    user_id = job_data['user_id']
+    print(f"--- Начало обработки задачи {prediction_id} ---")
     
     try:
-        # --- ШАГ 1: ТОЛЬКО ГЕНЕРАЦИЯ FLUX ---
-        print("-> Запуск модели 'FLUX Edit'...")
-        flux_output = run_replicate_model(
-            FLUX_MODEL_VERSION,
-            {"input_image": job_data['original_s3_url'], "prompt": job_data['prompt']},
-            "FLUX Edit"
-        )
-        print(f"<- Модель 'FLUX Edit' успешно завершена.")
-        generated_image_url = flux_output[0] if isinstance(flux_output, list) else flux_output
-        print(f"   -> Получен URL результата: {generated_image_url}")
+        # Шаг 1: Генерация FLUX
+        flux_output = run_replicate_model(FLUX_MODEL_VERSION, {"input_image": job_data['original_s3_url'], "prompt": job_data['prompt']}, "FLUX Edit")
+        temp_flux_url = flux_output[0] if isinstance(flux_output, list) else flux_output
+        
+        # НОВЫЙ ШАГ: Пересохраняем результат FLUX в наш S3
+        s3_flux_url = download_and_reupload_to_s3(temp_flux_url, user_id, prediction_id, "flux")
 
-        # --- ШАГ 2: СКАЧИВАЕМ РЕЗУЛЬТАТ И СРАЗУ ЗАГРУЖАЕМ В S3 ---
-        print("-> Скачиваем результат от Replicate...")
-        image_response = requests.get(generated_image_url, stream=True)
-        image_response.raise_for_status()
-        final_image_data = io.BytesIO(image_response.content)
+        # Шаг 2: Создание маски, используя сохраненную картинку
+        mask_output = run_replicate_model(SAM_MODEL_VERSION, {"image": s3_flux_url, "prompt": job_data['prompt']}, "SAM Masking")
+        temp_mask_url = mask_output[0] if isinstance(mask_output, list) else mask_output
         
-        final_s3_url = upload_to_s3(final_image_data, job_data['user_id'], prediction_id)
+        # НОВЫЙ ШАГ: Пересохраняем маску в наш S3
+        s3_mask_url = download_and_reupload_to_s3(temp_mask_url, user_id, prediction_id, "mask")
         
-        # --- ШАГ 3: ОБНОВЛЯЕМ БД ---
+        # Шаг 3: Апскейл, используя сохраненную картинку
+        upscaled_output = run_replicate_model(UPSCALER_MODEL_VERSION, {"image": s3_flux_url}, "Upscaler")
+        temp_upscaled_url = upscaled_output[0] if isinstance(upscaled_output, list) else upscaled_output
+        
+        # НОВЫЙ ШАГ: Пересохраняем апскейл в наш S3
+        s3_upscaled_url = download_and_reupload_to_s3(temp_upscaled_url, user_id, prediction_id, "upscale")
+
+        # Шаг 4: Композитинг, используя только наши ссылки S3
+        final_image_data = composite_images(job_data['original_s3_url'], s3_upscaled_url, s3_mask_url)
+        
+        # Шаг 5: Загрузка финального результата в наш S3
+        final_s3_url = upload_final_to_s3(final_image_data, user_id, prediction_id)
+
+        # Шаг 6: Обновляем запись в БД
         prediction = db_session.query(Prediction).get(prediction_id)
         if prediction:
             prediction.status = 'completed'
             prediction.output_url = final_s3_url
             db_session.commit()
-            print(f"--- УПРОЩЕННАЯ ЗАДАЧА {prediction_id} УСПЕШНО ЗАВЕРШЕНА! ---")
+            print(f"--- Задача {prediction_id} успешно завершена! ---")
 
     except Exception as e:
-        print(f"!!! ОШИБКА при обработке УПРОЩЕННОЙ задачи {prediction_id}:")
+        print(f"!!! ОШИБКА при обработке задачи {prediction_id}:")
         traceback.print_exc()
         prediction = db_session.query(Prediction).get(prediction_id)
         if prediction:
@@ -127,8 +158,6 @@ def process_job(job_data, db_session):
                 user.token_balance += prediction.token_cost
                 print(f"Возвращено {prediction.token_cost} токенов пользователю {user.id}")
             db_session.commit()
-
-### КОНЕЦ БЛОКА ДЛЯ ЗАМЕНЫ ФУНКЦИИ ###
 
 # --- ОСНОВНОЙ ЦИКЛ ВОРКЕРА ---
 def main():
@@ -149,3 +178,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+### КОНЕЦ: КОД ДЛЯ ПОЛНОЙ ЗАМЕНЫ ФАЙЛА WORKER.PY ###

@@ -5,6 +5,7 @@ import time
 import json
 import requests
 import io
+import traceback
 
 import replicate
 import redis
@@ -106,7 +107,8 @@ def process_job(job_data, db_session):
         db_session.commit()
         print(f"--- Задача {prediction_id} успешно завершена! ---")
     except Exception as e:
-        print(f"!!! ОШИБКА при обработке задачи {prediction_id}: {e}")
+        print(f"!!! ОШИБКА при обработке задачи {prediction_id}:")
+        traceback.print_exc() # <--- ЗАМЕНИТЕ СТАРЫЙ PRINT НА ЭТИ ДВЕ СТРОКИ
         prediction = db_session.query(Prediction).get(prediction_id)
         if prediction:
             prediction.status = 'failed'

@@ -28,7 +28,7 @@ AWS_S3_REGION = os.environ.get('AWS_S3_REGION')
 # --- МОДЕЛИ REPLICATE ---
 FLUX_MODEL_VERSION = "black-forest-labs/flux-kontext-max:0b9c317b23e79a9a0d8b9602ff4d04030d433055927fb7c4b91c44234a6818c4"
 # Мы все еще пытаемся использовать правильную версию SAM
-SAM_MODEL_VERSION = "lucataco/segment-anything-2:be7cbde9fdf0eecdc8b20ffec9dd0d1cfeace0832d4d0b58a071d993182e1be0"
+SAM_MODEL_VERSION = "tmappdev/lang-segment-anything:46424b33633644367f035f29d7249911e3b5e91a033526f8d7441a7e4683a45c"
 UPSCALER_MODEL_VERSION = "nightmareai/real-esrgan:42fed1c4974146d4d2414e2be2c5277c5fcf05f45d25456d209595473143a84F"
 
 # --- ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ ---
@@ -75,25 +75,6 @@ def run_replicate_model(version, input_data, description):
     print(f"<- Модель '{description}' успешно завершена.")
     return prediction.output
 
-def download_and_reupload_to_s3(source_url, user_id, prediction_id, step_name):
-    """Скачивает файл с временного URL и перезаливает в наш S3."""
-    print(f"-> Скачиваем промежуточный результат ({step_name})...")
-    response = requests.get(source_url, stream=True)
-    response.raise_for_status()
-    
-    file_data = io.BytesIO(response.content)
-    content_type = response.headers.get('Content-Type', 'image/png')
-    
-    s3_client = boto3.client('s3', region_name=AWS_S3_REGION, aws_access_key_id=AWS_ACCESS_KEY_ID, aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
-    
-    object_name = f"generations/{user_id}/{prediction_id}-{step_name}-{uuid.uuid4().hex[:6]}.png"
-    
-    s3_client.upload_fileobj(file_data, AWS_S3_BUCKET_NAME, object_name, ExtraArgs={'ContentType': content_type})
-    
-    permanent_s3_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION}.amazonaws.com/{object_name}"
-    print(f"<- Промежуточный результат ({step_name}) сохранен в S3: {permanent_s3_url}")
-    return permanent_s3_url
-
 def composite_images(original_url, upscaled_url, mask_url):
     # ... (эта функция остается без изменений) ...
     print("-> Начало композитинга изображений...")
@@ -111,17 +92,28 @@ def composite_images(original_url, upscaled_url, mask_url):
     except Exception as e:
         raise Exception(f"Ошибка на этапе композитинга: {e}")
 
-def upload_final_to_s3(image_data, user_id, prediction_id):
-    # ... (переименовали для ясности) ...
-    print("-> Загрузка ФИНАЛЬНОГО результата в S3...")
+def upload_to_s3(image_data, user_id, prediction_id):
+    """Загружает финальное изображение в наш S3 бакет."""
+    print("-> Загрузка финального результата в S3...")
     s3_client = boto3.client('s3', region_name=AWS_S3_REGION, aws_access_key_id=AWS_ACCESS_KEY_ID, aws_secret_access_key=AWS_SECRET_ACCESS_KEY)
+    
+    # Генерируем уникальное имя для финального файла
     object_name = f"generations/{user_id}/{prediction_id}-final.png"
-    s3_client.upload_fileobj(image_data, AWS_S3_BUCKET_NAME, object_name, ExtraArgs={'ContentType': 'image/png'})
+    
+    # Загружаем данные из памяти в S3
+    s3_client.upload_fileobj(
+        image_data,
+        AWS_S3_BUCKET_NAME,
+        object_name,
+        ExtraArgs={'ContentType': 'image/png'}
+    )
+    
     permanent_s3_url = f"https://{AWS_S3_BUCKET_NAME}.s3.{AWS_S3_REGION}.amazonaws.com/{object_name}"
     print(f"<- Финальный результат сохранен в S3: {permanent_s3_url}")
     return permanent_s3_url
 
 # --- ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ---
+# --- ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ (ИСПРАВЛЕНА И УПРОЩЕНА) ---
 def process_job(job_data, db_session):
     prediction_id = job_data['prediction_id']
     print(f"--- Начало обработки задачи {prediction_id} ---")
@@ -130,11 +122,9 @@ def process_job(job_data, db_session):
         flux_output = run_replicate_model(FLUX_MODEL_VERSION, {"input_image": job_data['original_s3_url'], "prompt": job_data['prompt']}, "FLUX Edit")
         generated_image_url = flux_output[0] if isinstance(flux_output, list) else flux_output
 
-        # Шаг 2: Создание маски (используем модель, которую вы нашли)
-        # У этой модели параметр называется text_prompt, а не prompt
+        # Шаг 2: Создание маски (используем правильную модель и правильный параметр)
         sam_input = {"image": generated_image_url, "text_prompt": job_data['prompt']}
         mask_output = run_replicate_model(SAM_MODEL_VERSION, sam_input, "Lang-SAM Masking")
-        # Эта модель возвращает результат в виде списка, берем первый элемент
         mask_url = mask_output[0] if isinstance(mask_output, list) else mask_output
 
         # Шаг 3: Апскейл
@@ -143,10 +133,9 @@ def process_job(job_data, db_session):
 
         # Шаг 4: Композитинг
         final_image_data = composite_images(job_data['original_s3_url'], upscaled_image_url, mask_url)
-        
+
         # Шаг 5: Загрузка финального результата в S3
-        # Мы переименовали вашу старую функцию upload_to_s3 для ясности
-        final_s3_url = upload_final_to_s3(final_image_data, job_data['user_id'], prediction_id)
+        final_s3_url = upload_to_s3(final_image_data, job_data['user_id'], prediction_id)
 
         # Шаг 6: Обновляем запись в БД
         prediction = db_session.query(Prediction).get(prediction_id)

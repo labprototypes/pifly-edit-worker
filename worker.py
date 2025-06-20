@@ -4,7 +4,7 @@ import os, time, json, requests, io, traceback, uuid, redis, boto3
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import sessionmaker
-from PIL import Image
+from PIL import Image, ImageFilter
 import replicate
 
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -69,6 +69,8 @@ def run_replicate_model(version, input_data, description):
 
 # --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ composite_images ---
 
+# --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ composite_images ---
+
 def composite_images(original_url, upscaled_url, mask_url):
     print("-> Начало композитинга изображений...")
     try:
@@ -76,17 +78,25 @@ def composite_images(original_url, upscaled_url, mask_url):
         upscaled_img = Image.open(requests.get(upscaled_url, stream=True).raw).convert("RGBA")
         mask_img = Image.open(requests.get(mask_url, stream=True).raw).convert("L")
 
-        # ИСПРАВЛЕНИЕ: Мы должны работать в одном разрешении.
-        # Увеличиваем маску до размера апскейл-картинки
-        high_res_mask = mask_img.resize(upscaled_img.size, Image.LANCZOS)
+        # --- НОВЫЙ БЛОК КОДА ДЛЯ ОБРАБОТКИ МАСКИ ---
+        # Рассчитываем радиус размытия. Вместо 30% (непонятно от чего),
+        # возьмем 5% от меньшей стороны картинки. Это значение можно будет настраивать.
+        # Большой радиус Гауссова размытия одновременно и расширяет белую область, и смягчает края.
+        blur_radius = int(min(mask_img.size) * 0.05) 
+        print(f"   -> Применяем Гауссово размытие к маске с радиусом: {blur_radius}")
         
-        # Увеличиваем оригинальное изображение, чтобы оно стало фоном для апскейл-патча
-        high_res_original = original_img.resize(upscaled_img.size, Image.LANCZOS)
+        # Размываем маску для создания мягких, растушеванных краев
+        soft_mask = mask_img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        # --- КОНЕЦ НОВОГО БЛОКА ---
 
-        # "Наклеиваем" новую высококачественную часть на высококачественный фон по маске
+        # Используем новую "мягкую" маску для финальной сборки
+        high_res_mask = soft_mask.resize(upscaled_img.size, Image.LANCZOS)
+        high_res_original = original_img.resize(upscaled_img.size, Image.LANCZOS)
+        
+        # "Наклеиваем" новую высококачественную часть на высококачественный фон по МЯГКОЙ маске
         high_res_final = Image.composite(upscaled_img, high_res_original, high_res_mask)
         
-        # Теперь уменьшаем результат до исходного размера, чтобы соответствовать требованиям
+        # Уменьшаем результат до исходного размера
         final_image = high_res_final.resize(original_img.size, Image.LANCZOS)
 
         image_data = io.BytesIO()

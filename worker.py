@@ -81,34 +81,66 @@ def upload_to_s3(image_data, user_id, prediction_id):
     print(f"<- Результат сохранен в S3: {permanent_s3_url}")
     return permanent_s3_url
 
+### НАЧАЛО БЛОКА ДЛЯ ЗАМЕНЫ ФУНКЦИИ ###
+
 def process_job(job_data, db_session):
+    """Основная логика обработки одной задачи."""
     prediction_id = job_data['prediction_id']
+    # --- ИСПРАВЛЕННАЯ ВЕРСИЯ МОДЕЛИ ---
+    SAM_MODEL_VERSION_FIXED = "lucataco/segment-anything-2:722340f0e15369c474075BF4793c12f4625f383a1526cc40d499255a6"
+
     print(f"--- Начало обработки задачи {prediction_id} ---")
+    
     try:
-        flux_output = run_replicate_model(FLUX_MODEL_VERSION, {"input_image": job_data['original_s3_url'], "prompt": job_data['prompt']}, "FLUX Edit")
-        print(f"!!! РЕЗУЛЬТАТ FLUX: {flux_output}")
+        # Шаг 1: Генерация измененного изображения с помощью FLUX
+        flux_output = run_replicate_model(
+            FLUX_MODEL_VERSION,
+            {"input_image": job_data['original_s3_url'], "prompt": job_data['prompt']},
+            "FLUX Edit"
+        )
         generated_image_url = flux_output[0] if isinstance(flux_output, list) else flux_output
-        print(f"   -> Используем URL для следующих шагов: {generated_image_url}")
-        mask_output = run_replicate_model(SAM_MODEL_VERSION, {"image": generated_image_url, "prompt": job_data['prompt']}, "SAM Masking")
-        print(f"!!! РЕЗУЛЬТАТ SAM: {mask_output}")
-        if not isinstance(mask_output, dict) or 'mask' not in mask_output:
-            raise Exception(f"Неожиданный формат ответа от модели SAM: {mask_output}")
-        mask_url = mask_output['mask']
-        print(f"   -> Используем URL маски: {mask_url}")
-        upscaled_output = run_replicate_model(UPSCALER_MODEL_VERSION, {"image": generated_image_url}, "Upscaler")
-        print(f"!!! РЕЗУЛЬТАТ UPSCALER: {upscaled_output}")
+        print(f"   -> FLUX URL: {generated_image_url}")
+
+
+        # Шаг 2: Создание маски с помощью правильной модели, которую вы нашли
+        mask_output = run_replicate_model(
+            SAM_MODEL_VERSION_FIXED, # Используем исправленную версию
+            {"image": generated_image_url, "prompt": job_data['prompt']},
+            "SAM Masking (v2)"
+        )
+        print(f"!!! РЕЗУЛЬТАТ SAM-2: {mask_output}")
+        # ИСПРАВЛЕНИЕ: Эта модель возвращает список, берем первый элемент
+        mask_url = mask_output[0] if isinstance(mask_output, list) else mask_output
+        print(f"   -> MASK URL: {mask_url}")
+
+
+        # Шаг 3: Апскейл сгенерированного изображения
+        upscaled_output = run_replicate_model(
+            UPSCALER_MODEL_VERSION,
+            {"image": generated_image_url},
+            "Upscaler"
+        )
         upscaled_image_url = upscaled_output[0] if isinstance(upscaled_output, list) else upscaled_output
-        print(f"   -> Используем URL апскейла: {upscaled_image_url}")
+        print(f"   -> UPSCALE URL: {upscaled_image_url}")
+
+
+        # Шаг 4: Композитинг
         final_image_data = composite_images(job_data['original_s3_url'], upscaled_image_url, mask_url)
+        
+        # Шаг 5: Загрузка результата в наш S3
         final_s3_url = upload_to_s3(final_image_data, job_data['user_id'], prediction_id)
+
+        # Шаг 6: Обновляем запись в БД со статусом 'completed'
         prediction = db_session.query(Prediction).get(prediction_id)
-        prediction.status = 'completed'
-        prediction.output_url = final_s3_url
-        db_session.commit()
-        print(f"--- Задача {prediction_id} успешно завершена! ---")
+        if prediction:
+            prediction.status = 'completed'
+            prediction.output_url = final_s3_url
+            db_session.commit()
+            print(f"--- Задача {prediction_id} успешно завершена! ---")
+
     except Exception as e:
         print(f"!!! ОШИБКА при обработке задачи {prediction_id}:")
-        traceback.print_exc() # <--- ЗАМЕНИТЕ СТАРЫЙ PRINT НА ЭТИ ДВЕ СТРОКИ
+        traceback.print_exc()
         prediction = db_session.query(Prediction).get(prediction_id)
         if prediction:
             prediction.status = 'failed'
@@ -117,6 +149,8 @@ def process_job(job_data, db_session):
                 user.token_balance += prediction.token_cost
                 print(f"Возвращено {prediction.token_cost} токенов пользователю {user.id}")
             db_session.commit()
+
+### КОНЕЦ БЛОКА ДЛЯ ЗАМЕНЫ ФУНКЦИИ ###
 
 # --- ОСНОВНОЙ ЦИКЛ ВОРКЕРА ---
 def main():

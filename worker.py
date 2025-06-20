@@ -29,7 +29,7 @@ AWS_S3_REGION = os.environ.get('AWS_S3_REGION')
 FLUX_MODEL_VERSION = "black-forest-labs/flux-kontext-max:0b9c317b23e79a9a0d8b9602ff4d04030d433055927fb7c4b91c44234a6818c4"
 # Мы все еще пытаемся использовать правильную версию SAM
 SAM_MODEL_VERSION = "tmappdev/lang-segment-anything:891411c38a6ed2d44c004b7b9e44217df7a5b07848f29ddefd2e28bc7cbf93bc"
-UPSCALER_MODEL_VERSION = "philz1337x/clarity-upscaler:4a3b865f34246b3254921612450410657993a40d24955b273413cb02526715b5"
+UPSCALER_MODEL_VERSION = "philz1337x/clarity-upscaler:dfad41707589d68ecdccd1dfa600d55a208f9310748e44bfe35b4a6291453d5e"
 
 # --- ПОДКЛЮЧЕНИЕ К БАЗЕ ДАННЫХ ---
 app = Flask(__name__)
@@ -119,11 +119,11 @@ def process_job(job_data, db_session):
     print(f"--- Начало обработки задачи {prediction_id} ---")
     try:
         # Шаг 1: Генерация FLUX
-        flux_output = run_replicate_model(FLUX_MODEL_VERSION, {"input_image": job_data['original_s3_url'], "prompt": job_data['prompt']}, "FLUX Edit")
+        flux_output = run_replicate_model(FLUX_MODEL_VERSION, {"input_image": job_data['original_s3_url'], "prompt": job_data['generation_prompt']}, "FLUX Edit")
         generated_image_url = flux_output[0] if isinstance(flux_output, list) else flux_output
 
         # Шаг 2: Создание маски (используем правильную модель и правильный параметр)
-        sam_input = {"image": generated_image_url, "text_prompt": job_data['prompt']}
+        sam_input = {"image": generated_image_url, "text_prompt": job_data['mask_prompt']}
         mask_output = run_replicate_model(SAM_MODEL_VERSION, sam_input, "Lang-SAM Masking")
 
         # Шаг 3: Апскейл

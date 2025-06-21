@@ -78,31 +78,34 @@ def composite_images(original_url, upscaled_url, mask_url):
         upscaled_img = Image.open(requests.get(upscaled_url, stream=True).raw).convert("RGBA")
         mask_img = Image.open(requests.get(mask_url, stream=True).raw).convert("L")
 
-        # --- НОВЫЙ БЛОК КОДА ДЛЯ ОБРАБОТКИ МАСКИ ---
-        # Рассчитываем радиус размытия. Вместо 30% (непонятно от чего),
-        # возьмем 5% от меньшей стороны картинки. Это значение можно будет настраивать.
-        # Большой радиус Гауссова размытия одновременно и расширяет белую область, и смягчает края.
-        blur_radius = int(min(mask_img.size) * 0.05) 
-        print(f"   -> Применяем Гауссово размытие к маске с радиусом: {blur_radius}")
-        
-        # Размываем маску для создания мягких, растушеванных краев
-        soft_mask = mask_img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        # --- НОВЫЙ БЛОК ПРОДВИНУТОЙ ОБРАБОТКИ МАСКИ ---
+        # Шаг 1: Рассчитываем, на сколько пикселей расширить маску (примерно 15% от ширины)
+        expand_size = int(mask_img.width * 0.15) # 15% в каждую сторону = 30% общая ширина
+        # Убедимся, что размер нечетный для фильтра
+        expand_size = expand_size if expand_size % 2 != 0 else expand_size + 1
+        print(f"   -> Расширяем маску на ~{expand_size} пикселей...")
+
+        # Расширяем маску, "наращивая" белые области
+        expanded_mask = mask_img.filter(ImageFilter.MaxFilter(size=expand_size))
+
+        # Шаг 2: Рассчитываем радиус размытия для растушевки (примерно 20% от размера расширения)
+        blur_radius = int(expand_size * 0.2)
+        print(f"   -> Растушевываем края маски с радиусом: {blur_radius}")
+
+        # Размываем расширенную маску для создания мягких краев
+        soft_mask = expanded_mask.filter(ImageFilter.GaussianBlur(radius=blur_radius))
         # --- КОНЕЦ НОВОГО БЛОКА ---
 
-        # Используем новую "мягкую" маску для финальной сборки
+        # Остальная логика остается прежней, но использует новую soft_mask
         high_res_mask = soft_mask.resize(upscaled_img.size, Image.LANCZOS)
         high_res_original = original_img.resize(upscaled_img.size, Image.LANCZOS)
-        
-        # "Наклеиваем" новую высококачественную часть на высококачественный фон по МЯГКОЙ маске
         high_res_final = Image.composite(upscaled_img, high_res_original, high_res_mask)
-        
-        # Уменьшаем результат до исходного размера
         final_image = high_res_final.resize(original_img.size, Image.LANCZOS)
 
         image_data = io.BytesIO()
         final_image.save(image_data, format='PNG')
         image_data.seek(0)
-        
+
         print("<- Композитинг успешно завершен.")
         return image_data
     except Exception as e:
@@ -121,24 +124,38 @@ def process_job(job_data, db_session):
     prediction_id = job_data['prediction_id']
     print(f"--- Начало обработки задачи {prediction_id} ---")
     try:
+        # Шаг 1: Генерация FLUX
         flux_output = run_replicate_model(FLUX_MODEL_VERSION, {"input_image": job_data['original_s3_url'], "prompt": job_data['generation_prompt']}, "FLUX Edit")
         generated_image_url = flux_output[0] if isinstance(flux_output, list) else flux_output
-        
-        sam_input = {"image": generated_image_url, "text_prompt": job_data['mask_prompt']}
+
+        # --- НОВАЯ ЛОГИКА ВЫБОРА ИСТОЧНИКА ДЛЯ МАСКИ ---
+        intent = job_data.get('intent')
+        if intent == 'ADD':
+            # Если ДОБАВЛЯЕМ, ищем объект на НОВОЙ картинке
+            image_for_masking = generated_image_url
+            print(f"   -> Режим 'ADD'. Маска будет создаваться по новому изображению.")
+        else: # Для REMOVE и REPLACE
+            # Если УДАЛЯЕМ или ЗАМЕНЯЕМ, ищем объект на ОРИГИНАЛЬНОЙ картинке
+            image_for_masking = job_data['original_s3_url']
+            print(f"   -> Режим '{intent}'. Маска будет создаваться по оригинальному изображению.")
+
+        # Шаг 2: Создание маски
+        sam_input = {"image": image_for_masking, "text_prompt": job_data['mask_prompt']}
         mask_output = run_replicate_model(SAM_MODEL_VERSION, sam_input, "Lang-SAM Masking")
         mask_url = mask_output[0] if isinstance(mask_output, list) else mask_output
-        
+
+        # ... (остальные шаги - апскейл, композитинг, сохранение - без изменений) ...
+
         upscaled_output = run_replicate_model(UPSCALER_MODEL_VERSION, {"image": generated_image_url}, "Upscaler")
         upscaled_image_url = upscaled_output[0] if isinstance(upscaled_output, list) else upscaled_output
-        
         final_image_data = composite_images(job_data['original_s3_url'], upscaled_image_url, mask_url)
         final_s3_url = upload_to_s3(final_image_data, job_data['user_id'], prediction_id)
-        
-        prediction = db_session.get(Prediction, prediction_id)
+
+        prediction = db.session.get(Prediction, prediction_id)
         if prediction:
             prediction.status = 'completed'
             prediction.output_url = final_s3_url
-            db_session.commit()
+            db.session.commit()
             print(f"--- ПОЛНАЯ ЗАДАЧА {prediction_id} УСПЕШНО ЗАВЕРШЕНА! ---")
     except Exception as e:
         print(f"!!! ОШИБКА при обработке задачи {prediction_id}:")

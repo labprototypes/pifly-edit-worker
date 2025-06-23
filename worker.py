@@ -80,7 +80,7 @@ def composite_images(original_url, upscaled_url, mask_url):
 
         # --- НОВЫЙ БЛОК ПРОДВИНУТОЙ ОБРАБОТКИ МАСКИ ---
         # Шаг 1: Рассчитываем, на сколько пикселей расширить маску (примерно 15% от ширины)
-        expand_size = int(mask_img.width * 0.10) # 15% в каждую сторону = 30% общая ширина
+        expand_size = int(mask_img.width * 0.05) # 15% в каждую сторону = 30% общая ширина
         # Убедимся, что размер нечетный для фильтра
         expand_size = expand_size if expand_size % 2 != 0 else expand_size + 1
         print(f"   -> Расширяем маску на ~{expand_size} пикселей...")
@@ -89,7 +89,7 @@ def composite_images(original_url, upscaled_url, mask_url):
         expanded_mask = mask_img.filter(ImageFilter.MaxFilter(size=expand_size))
 
         # Шаг 2: Рассчитываем радиус размытия для растушевки (примерно 20% от размера расширения)
-        blur_radius = int(expand_size * 0.1)
+        blur_radius = int(expand_size * 0.05)
         print(f"   -> Растушевываем края маски с радиусом: {blur_radius}")
 
         # Размываем расширенную маску для создания мягких краев

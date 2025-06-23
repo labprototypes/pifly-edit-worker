@@ -141,18 +141,18 @@ def process_job(job_data, db_session):
         if original_width <= 2048: # 2K и меньше
             scale_factor = 2.0
             creativity = 0.40
-            resemblance = 0.30
-            hdr = 10 # <--- ИСПРАВЛЕНО
+            resemblance = 1.20
+            hdr = 2 # <--- ИСПРАВЛЕНО
         elif original_width <= 4096: # 4K
             scale_factor = 4.0
             creativity = 0.40
-            resemblance = 0.30
-            hdr = 10 # <--- ИСПРАВЛЕНО
+            resemblance = 1.20
+            hdr = 2 # <--- ИСПРАВЛЕНО
         else: # 6K и больше
             scale_factor = 6.0
             creativity = 0.30
-            resemblance = 0.50
-            hdr = 10 # <--- ИСПРАВЛЕНО
+            resemblance = 1.50
+            hdr = 1 # <--- ИСПРАВЛЕНО
             
         upscaler_input = {
             "image": generated_image_url,

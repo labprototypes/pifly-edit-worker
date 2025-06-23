@@ -142,20 +142,17 @@ def process_job(job_data, db_session):
             scale_factor = 2.0
             creativity = 0.40
             resemblance = 0.30
-            hdr = 0.10
-            print(f"   -> Режим апскейла: 2K (x{scale_factor})")
+            hdr = 10 # <--- ИСПРАВЛЕНО
         elif original_width <= 4096: # 4K
             scale_factor = 4.0
             creativity = 0.40
             resemblance = 0.30
-            hdr = 0.10
-            print(f"   -> Режим апскейла: 4K (x{scale_factor})")
+            hdr = 10 # <--- ИСПРАВЛЕНО
         else: # 6K и больше
             scale_factor = 6.0
             creativity = 0.30
             resemblance = 0.50
-            hdr = 0.10
-            print(f"   -> Режим апскейла: 6K (x{scale_factor})")
+            hdr = 10 # <--- ИСПРАВЛЕНО
             
         upscaler_input = {
             "image": generated_image_url,

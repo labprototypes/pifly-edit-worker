@@ -74,39 +74,46 @@ def run_replicate_model(version, input_data, description):
 # --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ composite_images ---
 
 def composite_images(original_url, upscaled_url, mask_url):
-    print("-> Начало композитинга изображений (финальная логика)...")
+    print("-> Начало композитинга изображений...")
     try:
-        # Загружаем оригинал и маску. Они должны быть одного размера.
         original_img = Image.open(requests.get(original_url, stream=True).raw).convert("RGBA")
+        upscaled_img = Image.open(requests.get(upscaled_url, stream=True).raw).convert("RGBA")
         mask_img = Image.open(requests.get(mask_url, stream=True).raw).convert("L")
 
-        # Загружаем увеличенную версию ИЗМЕНЕННОГО ОБЪЕКТА
-        upscaled_patch = Image.open(requests.get(upscaled_url, stream=True).raw).convert("RGBA")
-
-        # --- НОВАЯ, ПРАВИЛЬНАЯ ЛОГИКА ---
-        # 1. Уменьшаем наш высококачественный патч до размера оригинала.
-        #    За счет этого он сохраняет больше деталей, чем если бы мы не делали апскейл.
-        final_res_patch = upscaled_patch.resize(original_img.size, Image.LANCZOS)
-
-        # 2. Обрабатываем маску, как и договаривались (расширение + растушевка)
-        expand_size = int(mask_img.width * 0.10)
+        # --- Блок продвинутой обработки маски ---
+        expand_size = int(mask_img.width * 0.05)
         expand_size = expand_size if expand_size % 2 != 0 else expand_size + 1
+        print(f"   -> Расширяем маску на ~{expand_size} пикселей...")
         expanded_mask = mask_img.filter(ImageFilter.MaxFilter(size=expand_size))
-        
-        blur_radius = int(expand_size * 1.0)
-        soft_mask = expanded_mask.filter(ImageFilter.GaussianBlur(radius=blur_radius))
 
-        # 3. Теперь "наклеиваем" качественный патч нужного размера на ОРИГИНАЛ по мягкой маске
-        # Фон остается нетронутым и сохраняет 100% исходного качества.
-        final_image = Image.composite(final_res_patch, original_img, soft_mask)
+        blur_radius = int(expand_size * 0.05)
+        print(f"   -> Растушевываем края маски с радиусом: {blur_radius}")
+        soft_mask = expanded_mask.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        # --- Конец блока ---
+
+        # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Приводим все слои к одному размеру ---
+        print(f"   -> Изменение размера слоев до {upscaled_img.size} для композитинга...")
+        # 1. Изменяем размер маски до размера увеличенного изображения
+        high_res_mask = soft_mask.resize(upscaled_img.size, Image.LANCZOS)
+        # 2. Изменяем размер ОРИГИНАЛА до размера увеличенного изображения
+        high_res_original = original_img.resize(upscaled_img.size, Image.LANCZOS)
+
+        # Теперь все три изображения (upscaled_img, high_res_original, high_res_mask) имеют одинаковый размер.
+        # 3. Производим композитинг в высоком разрешении
+        high_res_final = Image.composite(upscaled_img, high_res_original, high_res_mask)
+
+        # 4. Возвращаем финальное изображение к исходному размеру оригинала
+        print(f"   -> Возвращаем финальное изображение к исходному размеру {original_img.size}...")
+        final_image = high_res_final.resize(original_img.size, Image.LANCZOS)
 
         image_data = io.BytesIO()
         final_image.save(image_data, format='PNG')
         image_data.seek(0)
-        
+
         print("<- Композитинг успешно завершен.")
         return image_data
     except Exception as e:
+        traceback.print_exc() # Добавляем полный трейсбек для лучшей диагностики
         raise Exception(f"Ошибка на этапе композитинга: {e}")
 
 def upload_to_s3(image_data, user_id, prediction_id):

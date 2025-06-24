@@ -39,43 +39,46 @@ class Prediction(db.Model):
 # --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ run_replicate_model ---
 
 def run_replicate_model(version, input_data, description):
-    """Запускает модель и активно опрашивает ее статус с улучшенной обработкой ошибок."""
+    """Запускает модель и активно опрашивает ее статус самым надежным способом (через get)."""
     print(f"-> Запуск модели '{description}'...")
+    # Шаг 1: Создаем предсказание
     prediction = replicate.predictions.create(version=version, input=input_data)
     print(f"   -> Replicate задача создана с ID: {prediction.id}")
 
     start_time = time.time()
-    # Увеличим общий таймаут до 10 минут (600 секунд) на всякий случай
-    timeout = 600 
+    timeout = 600  # 10 минут
 
-    while prediction.status not in ["succeeded", "failed", "canceled"]:
-        if time.time() - start_time > timeout:
-            raise Exception(f"Модель '{description}' не завершилась за {timeout} секунд (таймаут).")
-
-        time.sleep(3) # Немного увеличим паузу между проверками
-
-        # --- НОВЫЙ БЛОК: Улучшенная проверка статуса с обработкой ошибок ---
+    # Шаг 2: Входим в цикл ожидания
+    while True:
+        # --- НОВЫЙ БЛОК: Запрашиваем предсказание с нуля по ID ---
         try:
-            print(f"   -> Попытка обновить статус для '{description}' (ID: {prediction.id})...")
-            prediction.reload() # Эта команда делает сетевой запрос к API Replicate
-            print(f"   -> Статус обновлен: {prediction.status}")
+            print(f"   -> Запрос актуального статуса для '{description}' (ID: {prediction.id})...")
+            # Вместо .reload() используем .get() для максимальной надежности
+            prediction = replicate.predictions.get(prediction.id)
+            print(f"   -> Статус получен: {prediction.status}")
         except Exception as e:
-            print(f"   -> !!! ВНИМАНИЕ: Ошибка при обновлении статуса для '{description}': {e}. Повторная попытка...")
-            # Пропускаем эту итерацию и пробуем снова через 3 секунды
+            print(f"   -> !!! ВНИМАНИЕ: Ошибка при получении статуса для '{description}': {e}. Повторная попытка...")
+            time.sleep(5) # В случае ошибки ждем чуть дольше
             continue
         # --- КОНЕЦ НОВОГО БЛОКА ---
 
+        # Шаг 3: Проверяем, завершена ли задача
+        if prediction.status in ["succeeded", "failed", "canceled"]:
+            break  # Выходим из цикла, если получен финальный статус
+
+        # Шаг 4: Проверяем общий таймаут
+        if time.time() - start_time > timeout:
+            raise Exception(f"Модель '{description}' не завершилась за {timeout} секунд (таймаут).")
+
+        # Шаг 5: Ждем перед следующей проверкой
+        time.sleep(3)
+
+    # Шаг 6: Обрабатываем финальный результат
     if prediction.status != 'succeeded':
         raise Exception(f"Модель '{description}' не удалась со статусом {prediction.status}. Ошибка: {prediction.error}")
 
     print(f"<- Модель '{description}' успешно завершена.")
     return prediction.output
-
-# --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ composite_images ---
-
-# --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ composite_images ---
-
-# --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ composite_images ---
 
 def composite_images(original_url, upscaled_url, mask_url):
     print("-> Начало композитинга изображений...")

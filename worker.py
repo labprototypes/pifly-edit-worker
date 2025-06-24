@@ -171,7 +171,7 @@ def process_job(job_data, db_session):
             "creativity": creativity,
             "resemblance": resemblance,
             "num_inference_steps": num_inference_steps,
-            "dynamic": HDR  # Модель использует параметр 'dynamic' для HDR
+            "dynamic": hdr  # Модель использует параметр 'dynamic' для HDR
         }
         
         upscaled_output = run_replicate_model(UPSCALER_MODEL_VERSION, upscaler_input, "Upscaler")

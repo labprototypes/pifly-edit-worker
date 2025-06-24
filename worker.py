@@ -1,6 +1,8 @@
 # worker.py - ФИНАЛЬНАЯ ВЕРСИЯ
 
 import os, time, json, requests, io, traceback, uuid, redis, boto3
+import cv2
+import numpy as np
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import sessionmaker
@@ -81,49 +83,78 @@ def run_replicate_model(version, input_data, description):
     return prediction.output
 
 def composite_images(original_url, upscaled_url, mask_url):
-    print("-> Начало композитинга изображений...")
+    print("-> Начало композитинга изображений (метод OpenCV)...")
     try:
         MAX_RESOLUTION = 4096
-        original_img = Image.open(requests.get(original_url, stream=True).raw).convert("RGBA")
-        upscaled_img = Image.open(requests.get(upscaled_url, stream=True).raw).convert("RGBA")
-        mask_img = Image.open(requests.get(mask_url, stream=True).raw).convert("L")
 
-         # --- НОВЫЙ БЛОК: Ограничение разрешения для стабильности ---
-        if max(upscaled_img.size) > MAX_RESOLUTION:
-            print(f"   -> Изображение слишком большое ({upscaled_img.size}). Ограничиваем до {MAX_RESOLUTION}px.")
-            upscaled_img.thumbnail((MAX_RESOLUTION, MAX_RESOLUTION), Image.LANCZOS)
-            print(f"   -> Новый размер для композитинга: {upscaled_img.size}")
-        # --- КОНЕЦ НОВОГО БЛОКА ---
+        # --- Шаг 1: Загрузка изображений ---
+        # Используем requests для получения данных, а OpenCV для декодирования
+        def url_to_image(url, flags=cv2.IMREAD_UNCHANGED):
+            resp = requests.get(url, stream=True).raw
+            image_array = np.asarray(bytearray(resp.read()), dtype="uint8")
+            return cv2.imdecode(image_array, flags)
 
-        # --- Блок продвинутой обработки маски ---
-        expand_size = int(mask_img.width * 0.05)
+        original_img_bgr = url_to_image(original_url, cv2.IMREAD_COLOR)
+        upscaled_img_bgr = url_to_image(upscaled_url, cv2.IMREAD_COLOR)
+        mask_img_gray = url_to_image(mask_url, cv2.IMREAD_GRAYSCALE)
+
+        # Конвертируем в нужные цветовые пространства
+        original_img = cv2.cvtColor(original_img_bgr, cv2.COLOR_BGR2BGRA)
+        upscaled_img = cv2.cvtColor(upscaled_img_bgr, cv2.COLOR_BGR2BGRA)
+
+        # --- Шаг 2: Подготовка маски ---
+        # Проверка и ограничение разрешения
+        h, w = upscaled_img.shape[:2]
+        if max(h, w) > MAX_RESOLUTION:
+            scale = MAX_RESOLUTION / max(h, w)
+            new_w, new_h = int(w * scale), int(h * scale)
+            print(f"   -> Изображение слишком большое. Ограничиваем до {new_w}x{new_h}px.")
+            upscaled_img = cv2.resize(upscaled_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+        # Расширение и размытие маски с помощью быстрых функций OpenCV
+        h, w = upscaled_img.shape[:2]
+        expand_size = int(w * 0.05)
         expand_size = expand_size if expand_size % 2 != 0 else expand_size + 1
-        print(f"   -> Расширяем маску на ~{expand_size} пикселей...")
-        expanded_mask = mask_img.filter(ImageFilter.MaxFilter(size=expand_size))
 
-        blur_radius = int(expand_size * 0.05)
-        print(f"   -> Растушевываем края маски с радиусом: {blur_radius}")
-        soft_mask = expanded_mask.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-        # --- Конец блока ---
+        print(f"   -> Расширяем маску (OpenCV kernel size: {expand_size})...")
+        kernel = np.ones((expand_size, expand_size), np.uint8)
+        # Приводим маску к размеру измененного изображения перед обработкой
+        mask_resized = cv2.resize(mask_img_gray, (w, h), interpolation=cv2.INTER_NEAREST)
+        expanded_mask = cv2.dilate(mask_resized, kernel, iterations=1)
 
-        # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Приводим все слои к одному размеру ---
-        print(f"   -> Изменение размера слоев до {upscaled_img.size} для композитинга...")
-        high_res_mask = soft_mask.resize(upscaled_img.size, Image.LANCZOS)
-        high_res_original = original_img.resize(upscaled_img.size, Image.LANCZOS)
-        high_res_final = Image.composite(upscaled_img, high_res_original, high_res_mask)
+        # Размытие Гаусса для создания мягкой растушевки
+        blur_size = int(expand_size * 0.2)
+        blur_size = blur_size if blur_size % 2 != 0 else blur_size + 1
+        print(f"   -> Растушевываем края (OpenCV blur size: {blur_size})...")
+        soft_mask = cv2.GaussianBlur(expanded_mask, (blur_size, blur_size), 0)
 
-        print(f"   -> Возвращаем финальное изображение к исходному размеру {original_img.size}...")
-        final_image = high_res_final.resize(original_img.size, Image.LANCZOS)
+        # --- Шаг 3: Композитинг ---
+        # Нормализуем маску до диапазона 0.0-1.0
+        soft_mask_float = soft_mask.astype(float) / 255.0
+        # Добавляем альфа-канал для смешивания
+        soft_mask_alpha = cv2.cvtColor(soft_mask_float, cv2.COLOR_GRAY2BGR)
 
-        image_data = io.BytesIO()
-        final_image.save(image_data, format='PNG')
+        # Приводим оригинал к тому же размеру
+        original_resized = cv2.resize(original_img, (w, h), interpolation=cv2.INTER_AREA)
+
+        # Смешиваем изображения
+        composite = (soft_mask_alpha * upscaled_img) + ((1 - soft_mask_alpha) * original_resized)
+
+        # Возвращаем к исходному разрешению
+        original_h, original_w = original_img.shape[:2]
+        final_image = cv2.resize(composite, (original_w, original_h), interpolation=cv2.INTER_AREA)
+
+        # Конвертируем обратно для сохранения в PNG
+        _, image_data_encoded = cv2.imencode('.png', final_image)
+        image_data = io.BytesIO(image_data_encoded)
         image_data.seek(0)
 
-        print("<- Композитинг успешно завершен.")
+        print("<- Композитинг (OpenCV) успешно завершен.")
         return image_data
+
     except Exception as e:
         traceback.print_exc()
-        raise Exception(f"Ошибка на этапе композитинга: {e}")
+        raise Exception(f"Ошибка на этапе композитинга (OpenCV): {e}")
 
 def upload_to_s3(image_data, user_id, prediction_id):
     print("-> Загрузка финального результата в S3...")

@@ -20,13 +20,6 @@ FLUX_MODEL_VERSION = "black-forest-labs/flux-kontext-max:0b9c317b23e79a9a0d8b960
 SAM_MODEL_VERSION = "tmappdev/lang-segment-anything:891411c38a6ed2d44c004b7b9e44217df7a5b07848f29ddefd2e28bc7cbf93bc"
 UPSCALER_MODEL_VERSION = "philz1337x/clarity-upscaler:dfad41707589d68ecdccd1dfa600d55a208f9310748e44bfe35b4a6291453d5e"
 
-# Создаем кастомный HTTP-клиент с жестким таймаутом в 30 секунд
-custom_transport = httpx.HTTPTransport(retries=3)
-replicate_http_client = httpx.Client(
-    transport=custom_transport,
-    timeout=30.0 
-)
-
 # Инициализируем клиент Replicate с нашими настройками таймаута
 replicate_client = replicate.Client(
     api_token=REPLICATE_API_TOKEN,

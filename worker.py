@@ -96,12 +96,12 @@ def composite_images(original_url, upscaled_url, mask_url):
         # --- КОНЕЦ НОВОГО БЛОКА ---
 
         # --- Блок продвинутой обработки маски ---
-        expand_size = int(mask_img.width * 0.02)
+        expand_size = int(mask_img.width * 0.05)
         expand_size = expand_size if expand_size % 2 != 0 else expand_size + 1
         print(f"   -> Расширяем маску на ~{expand_size} пикселей...")
         expanded_mask = mask_img.filter(ImageFilter.MaxFilter(size=expand_size))
 
-        blur_radius = int(expand_size * 0.02)
+        blur_radius = int(expand_size * 0.05)
         print(f"   -> Растушевываем края маски с радиусом: {blur_radius}")
         soft_mask = expanded_mask.filter(ImageFilter.GaussianBlur(radius=blur_radius))
         # --- Конец блока ---

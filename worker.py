@@ -133,11 +133,17 @@ def composite_images(original_url, upscaled_url, mask_url):
         soft_mask = cv2.GaussianBlur(mask_resized_padded, (blur_size, blur_size), 0)
         # --- КОНЕЦ ИСПРАВЛЕННОЙ ЛОГИКИ ---
 
-        soft_mask_float = soft_mask.astype(np.float32) / 255.0
-        soft_mask_alpha = cv2.cvtColor(soft_mask_float, cv2.COLOR_GRAY2BGRA)
+        alpha_mask_float = (soft_mask / 255.0).astype(np.float32)
+        # 2. Добавляем новую ось, чтобы форма стала (h, w, 1).
+        # Это позволит NumPy автоматически "растянуть" ее на все 4 канала (BGRA) при умножении.
+        alpha_for_blending = alpha_mask_float[..., np.newaxis]
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
-        composite = (soft_mask_alpha * upscaled_img.astype(np.float32)) + ((1 - soft_mask_alpha) * original_resized.astype(np.float32))
+        # Применяем правильную формулу альфа-смешивания
+        # composite = Foreground * Alpha + Background * (1 - Alpha)
+        composite = (alpha_for_blending * upscaled_img.astype(np.float32)) + ((1 - alpha_for_blending) * original_resized.astype(np.float32))
         final_image = composite.astype(np.uint8)
+        
         print(f"<- Композитинг (OpenCV) успешно завершен. Финальное разрешение: {final_image.shape[1]}x{final_image.shape[0]}")
         
         _, image_data_encoded = cv2.imencode('.png', final_image)

@@ -80,6 +80,7 @@ def run_replicate_model(version, input_data, description):
 def composite_images(original_url, upscaled_url, mask_url):
     print("-> Начало композитинга изображений...")
     try:
+        MAX_RESOLUTION = 4096
         original_img = Image.open(requests.get(original_url, stream=True).raw).convert("RGBA")
         upscaled_img = Image.open(requests.get(upscaled_url, stream=True).raw).convert("RGBA")
         mask_img = Image.open(requests.get(mask_url, stream=True).raw).convert("L")

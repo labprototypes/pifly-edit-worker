@@ -87,7 +87,6 @@ def composite_images(original_url, upscaled_url, mask_url):
     try:
         MAX_RESOLUTION = 4096
 
-        # --- Шаг 1: Загрузка изображений ---
         def url_to_image(url, flags=cv2.IMREAD_UNCHANGED):
             resp = requests.get(url, stream=True).raw
             image_array = np.asarray(bytearray(resp.read()), dtype="uint8")
@@ -97,10 +96,10 @@ def composite_images(original_url, upscaled_url, mask_url):
         upscaled_img_bgr = url_to_image(upscaled_url, cv2.IMREAD_COLOR)
         mask_img_gray = url_to_image(mask_url, cv2.IMREAD_GRAYSCALE)
 
+        # Конвертируем в BGRA (4 канала)
         original_img = cv2.cvtColor(original_img_bgr, cv2.COLOR_BGR2BGRA)
         upscaled_img = cv2.cvtColor(upscaled_img_bgr, cv2.COLOR_BGR2BGRA)
 
-        # --- Шаг 2: Подготовка маски ---
         h, w = upscaled_img.shape[:2]
         if max(h, w) > MAX_RESOLUTION:
             scale = MAX_RESOLUTION / max(h, w)
@@ -122,21 +121,24 @@ def composite_images(original_url, upscaled_url, mask_url):
         print(f"   -> Растушевываем края (OpenCV blur size: {blur_size})...")
         soft_mask = cv2.GaussianBlur(expanded_mask, (blur_size, blur_size), 0)
 
-        # --- Шаг 3: Композитинг ---
-        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: используем np.float32 вместо float ---
         soft_mask_float = soft_mask.astype(np.float32) / 255.0
-        soft_mask_alpha = cv2.cvtColor(soft_mask_float, cv2.COLOR_GRAY2BGR)
+
+        # --- ИСПРАВЛЕНИЕ ЗДЕСЬ: делаем маску 4-канальной (BGRA), а не 3-канальной ---
+        soft_mask_alpha = cv2.cvtColor(soft_mask_float, cv2.COLOR_GRAY2BGRA)
 
         original_resized = cv2.resize(original_img, (w, h), interpolation=cv2.INTER_AREA)
 
-        # Приводим тип данных к единому для смешивания
+        # Приводим типы данных к единому для смешивания
         composite = (soft_mask_alpha * upscaled_img.astype(np.float32)) + ((1 - soft_mask_alpha) * original_resized.astype(np.float32))
-        composite = composite.astype(np.uint8) # Возвращаем к 8-битному формату
+        composite = composite.astype(np.uint8)
 
-        original_h, original_w = original_img.shape[:2]
-        final_image = cv2.resize(composite, (original_w, original_h), interpolation=cv2.INTER_AREA)
+        original_h, original_w = original_img_bgr.shape[:2] # Используем оригинал без альфа-канала для правильного размера
+        final_image_bgr = cv2.resize(composite, (original_w, original_h), interpolation=cv2.INTER_AREA)
 
-        _, image_data_encoded = cv2.imencode('.png', final_image)
+        # Конвертируем финальное изображение в BGR (3 канала) перед сохранением в PNG
+        final_image_to_save = cv2.cvtColor(final_image_bgr, cv2.COLOR_BGRA2BGR)
+
+        _, image_data_encoded = cv2.imencode('.png', final_image_to_save)
         image_data = io.BytesIO(image_data_encoded)
         image_data.seek(0)
 

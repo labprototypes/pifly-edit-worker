@@ -7,6 +7,9 @@ from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import sessionmaker
 from PIL import Image, ImageFilter
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from app import User, Prediction
 import replicate
 
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -29,10 +32,8 @@ replicate_client = replicate.Client(
 )
 # --- КОНЕЦ НОВОГО БЛОКА ---
 
-app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-db = SQLAlchemy(app)
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 class User(db.Model):
     id = db.Column(db.String(128), primary_key=True)
@@ -46,6 +47,10 @@ class Prediction(db.Model):
     token_cost = db.Column(db.Integer, nullable=False)
 
 # --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ run_replicate_model ---
+
+def get_db_session():
+    """Создает и возвращает новую сессию БД."""
+    return SessionLocal()
 
 def run_replicate_model(version, input_data, description):
     """Запускает модель через клиент с настроенным таймаутом и надежно опрашивает статус."""
@@ -174,10 +179,10 @@ def upload_to_s3(image_data, user_id, prediction_id):
     print(f"<- Финальный результат сохранен в S3: {permanent_s3_url}")
     return permanent_s3_url
 
-def process_job(job_data, db_session):
-    """Финальная версия с умным апскейлом"""
-    prediction_id = job_data['prediction_id']
+def process_job(job_data): # <--- Убран аргумент db_session
+    prediction_id = job_data.get('prediction_id')
     print(f"--- Начало обработки задачи {prediction_id} ---")
+    db_session = get_db_session()
     try:
         # Шаг 1: Генерация FLUX (без изменений)
         flux_output = run_replicate_model(FLUX_MODEL_VERSION, {"input_image": job_data['original_s3_url'], "prompt": job_data['generation_prompt']}, "FLUX Edit")
@@ -229,16 +234,17 @@ def process_job(job_data, db_session):
         final_image_data = composite_images(job_data['original_s3_url'], upscaled_image_url, mask_url)
         final_s3_url = upload_to_s3(final_image_data, job_data['user_id'], prediction_id)
 
-        prediction = db.session.get(Prediction, prediction_id)
+        prediction = db_session.get(Prediction, prediction_id) # <--- Используем db_session
         if prediction:
             prediction.status = 'completed'
             prediction.output_url = final_s3_url
-            db.session.commit()
+            db_session.commit() # <--- Сохраняем изменения через новую сессию
             print(f"--- ПОЛНАЯ ЗАДАЧА {prediction_id} УСПЕШНО ЗАВЕРШЕНА! ---")
 
     except Exception as e:
         print(f"!!! ОШИБКА при обработке задачи {prediction_id}:")
         traceback.print_exc()
+        db_session.rollback() # Откатываем изменения в случае ошибки
         prediction = db_session.get(Prediction, prediction_id)
         if prediction:
             prediction.status = 'failed'
@@ -247,22 +253,23 @@ def process_job(job_data, db_session):
                 user.token_balance += prediction.token_cost
                 print(f"Возвращено {prediction.token_cost} токенов пользователю {user.id}")
             db_session.commit()
+    finally:
+        # Всегда закрываем сессию после использования
+        db_session.close()
 
-def main():
-    with app.app_context():
-        print(">>> Воркер PiflyEdit запущен и ожидает задач...")
-        redis_client = redis.from_url(REDIS_URL)
-        Session = sessionmaker(bind=db.engine)
-        while True:
-            try:
-                _, job_json = redis_client.brpop('pifly_edit_jobs')
-                job_data = json.loads(job_json)
-                session = Session()
-                process_job(job_data, session)
-                session.close()
-            except Exception as e:
-                print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в основном цикле воркера: {e}")
-                time.sleep(5)
+def main_loop():
+    print(">>> Воркер PiflyEdit запущен и ожидает задач...")
+    redis_client = redis.from_url(REDIS_URL)
+    while True:
+        try:
+            # Просто получаем задачу и передаем ее в обработчик
+            _, job_json = redis_client.brpop('pifly_edit_jobs')
+            job_data = json.loads(job_json)
+            print(f"--- WORKER: Получена новая задача: {job_data.get('prediction_id')} ---")
+            process_job(job_data) # <--- Вызываем обновленную функцию
+        except Exception as e:
+            print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в основном цикле воркера: {e}")
+            time.sleep(10)
 
 if __name__ == "__main__":
     main()

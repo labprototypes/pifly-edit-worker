@@ -151,23 +151,27 @@ def process_job(job_data, db_session):
             creativity = 0.40
             resemblance = 1.20
             hdr = 2 # <--- ИСПРАВЛЕНО
+            num_inference_steps = 40
         elif original_width <= 4096: # 4K
             scale_factor = 4.0
             creativity = 0.40
             resemblance = 1.20
             hdr = 2 # <--- ИСПРАВЛЕНО
+            num_inference_steps = 40
         else: # 6K и больше
             scale_factor = 4.0
             creativity = 0.30
             resemblance = 1.50
             hdr = 1 # <--- ИСПРАВЛЕНО
+            num_inference_steps = 40
             
         upscaler_input = {
             "image": generated_image_url,
             "scale_factor": scale_factor,
             "creativity": creativity,
             "resemblance": resemblance,
-            "dynamic": hdr # Модель использует параметр 'dynamic' для HDR
+            "num_inference_steps": num_inference_steps,
+            "dynamic":  # Модель использует параметр 'dynamic' для HDR
         }
         
         upscaled_output = run_replicate_model(UPSCALER_MODEL_VERSION, upscaler_input, "Upscaler")

@@ -39,27 +39,31 @@ class Prediction(db.Model):
 # --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ run_replicate_model ---
 
 def run_replicate_model(version, input_data, description):
-    """Запускает модель и активно опрашивает ее статус вместо пассивного ожидания."""
+    """Запускает модель и активно опрашивает ее статус с улучшенной обработкой ошибок."""
     print(f"-> Запуск модели '{description}'...")
-    
-    # Создаем предсказание
     prediction = replicate.predictions.create(version=version, input=input_data)
     print(f"   -> Replicate задача создана с ID: {prediction.id}")
 
     start_time = time.time()
-    # Устанавливаем максимальное время ожидания, например, 5 минут (300 секунд)
-    timeout = 300 
+    # Увеличим общий таймаут до 10 минут (600 секунд) на всякий случай
+    timeout = 600 
 
     while prediction.status not in ["succeeded", "failed", "canceled"]:
-        # Проверяем, не вышли ли мы за таймаут
         if time.time() - start_time > timeout:
             raise Exception(f"Модель '{description}' не завершилась за {timeout} секунд (таймаут).")
 
-        # Ждем 2 секунды перед следующим запросом
-        time.sleep(2)
-        # Обновляем статус предсказания
-        prediction.reload()
-        print(f"   -> Проверка статуса для '{description}': {prediction.status}")
+        time.sleep(3) # Немного увеличим паузу между проверками
+
+        # --- НОВЫЙ БЛОК: Улучшенная проверка статуса с обработкой ошибок ---
+        try:
+            print(f"   -> Попытка обновить статус для '{description}' (ID: {prediction.id})...")
+            prediction.reload() # Эта команда делает сетевой запрос к API Replicate
+            print(f"   -> Статус обновлен: {prediction.status}")
+        except Exception as e:
+            print(f"   -> !!! ВНИМАНИЕ: Ошибка при обновлении статуса для '{description}': {e}. Повторная попытка...")
+            # Пропускаем эту итерацию и пробуем снова через 3 секунды
+            continue
+        # --- КОНЕЦ НОВОГО БЛОКА ---
 
     if prediction.status != 'succeeded':
         raise Exception(f"Модель '{description}' не удалась со статусом {prediction.status}. Ошибка: {prediction.error}")

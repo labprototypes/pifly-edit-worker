@@ -196,20 +196,20 @@ def process_job(job_data, db_session):
         
         if original_width <= 2048: # 2K и меньше
             scale_factor = 2.0
-            creativity = 0.40
-            resemblance = 1.20
+            creativity = 0.30
+            resemblance = 1.60
             hdr = 3 # <--- ИСПРАВЛЕНО
-            num_inference_steps = 40
+            num_inference_steps = 50
         elif original_width <= 4096: # 4K
             scale_factor = 4.0
             creativity = 0.30
-            resemblance = 1.50
+            resemblance = 1.60
             hdr = 3 # <--- ИСПРАВЛЕНО
             num_inference_steps = 60
         else: # 6K и больше
             scale_factor = 4.0
             creativity = 0.30
-            resemblance = 1.50
+            resemblance = 1.60
             hdr = 3 # <--- ИСПРАВЛЕНО
             num_inference_steps = 60
             

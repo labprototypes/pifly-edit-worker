@@ -91,54 +91,74 @@ def composite_images(original_url, upscaled_url, mask_url):
             resp = requests.get(url, stream=True).raw
             image_array = np.asarray(bytearray(resp.read()), dtype="uint8")
             return cv2.imdecode(image_array, flags)
+            
+        def resize_with_padding(img, target_shape):
+            """Изменяет размер с сохранением пропорций и добавлением черных полей."""
+            target_h, target_w = target_shape[:2]
+            h, w = img.shape[:2]
+            scale = min(target_w / w, target_h / h)
+            
+            new_w, new_h = int(w * scale), int(h * scale)
+            resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            
+            # Создаем черный холст нужного размера
+            if len(img.shape) > 2:
+                channels = img.shape[2]
+                canvas = np.full((target_h, target_w, channels), (0, 0, 0, 255), dtype=np.uint8) # Черный BGRA
+            else:
+                canvas = np.zeros((target_h, target_w), dtype=np.uint8) # Черный для маски
 
+            # Вставляем изображение по центру холста
+            x_center = (target_w - new_w) // 2
+            y_center = (target_h - new_h) // 2
+            canvas[y_center:y_center + new_h, x_center:x_center + new_w] = resized
+            return canvas
+
+        # --- Шаг 1: Загрузка и подготовка ---
         original_img_bgr = url_to_image(original_url, cv2.IMREAD_COLOR)
         upscaled_img_bgr = url_to_image(upscaled_url, cv2.IMREAD_COLOR)
         mask_img_gray = url_to_image(mask_url, cv2.IMREAD_GRAYSCALE)
 
-        # Конвертируем в BGRA (4 канала) для работы с прозрачностью
         original_img = cv2.cvtColor(original_img_bgr, cv2.COLOR_BGR2BGRA)
         upscaled_img = cv2.cvtColor(upscaled_img_bgr, cv2.COLOR_BGR2BGRA)
-
-        # --- Логика ограничения разрешения (остается без изменений) ---
-        h, w = upscaled_img.shape[:2]
-        if max(h, w) > MAX_RESOLUTION:
-            scale = MAX_RESOLUTION / max(h, w)
-            new_w, new_h = int(w * scale), int(h * scale)
+        
+        target_shape = upscaled_img.shape
+        if max(target_shape[:2]) > MAX_RESOLUTION:
+            scale = MAX_RESOLUTION / max(target_shape[:2])
+            new_w, new_h = int(target_shape[1] * scale), int(target_shape[0] * scale)
             print(f"   -> Изображение слишком большое. Ограничиваем до {new_w}x{new_h}px.")
             upscaled_img = cv2.resize(upscaled_img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            target_shape = upscaled_img.shape
 
-        # --- Подготовка маски (остается без изменений) ---
-        h, w = upscaled_img.shape[:2]
+        # --- Шаг 2: Обработка маски и изменение размеров ---
+        # Используем новую функцию, чтобы избежать искажений
+        print("   -> Подгонка слоев к единому размеру без искажений...")
+        original_resized = resize_with_padding(original_img, target_shape)
+        mask_resized_padded = resize_with_padding(mask_img_gray, target_shape)
+
+        h, w = target_shape[:2]
         expand_size = int(w * 0.05)
         expand_size = expand_size if expand_size % 2 != 0 else expand_size + 1
         kernel = np.ones((expand_size, expand_size), np.uint8)
-        mask_resized = cv2.resize(mask_img_gray, (w, h), interpolation=cv2.INTER_NEAREST)
-        expanded_mask = cv2.dilate(mask_resized, kernel, iterations=1)
-
-        blur_size = int(expand_size * 0.5)
+        expanded_mask = cv2.dilate(mask_resized_padded, kernel, iterations=1)
+        
+        blur_size = int(expand_size * 0.2)
         blur_size = blur_size if blur_size % 2 != 0 else blur_size + 1
         soft_mask = cv2.GaussianBlur(expanded_mask, (blur_size, blur_size), 0)
-
+        
         soft_mask_float = soft_mask.astype(np.float32) / 255.0
         soft_mask_alpha = cv2.cvtColor(soft_mask_float, cv2.COLOR_GRAY2BGRA)
 
-        # --- Композитинг (остается без изменений) ---
-        original_resized = cv2.resize(original_img, (w, h), interpolation=cv2.INTER_AREA)
-
+        # --- Шаг 3: Композитинг ---
         composite = (soft_mask_alpha * upscaled_img.astype(np.float32)) + ((1 - soft_mask_alpha) * original_resized.astype(np.float32))
         final_image = composite.astype(np.uint8)
-
-        # --- ИСПРАВЛЕНИЕ: УБИРАЕМ УМЕНЬШЕНИЕ РАЗРЕШЕНИЯ ---
-        # Больше не уменьшаем итоговую картинку до размера оригинала.
-        # Мы хотим получить результат в высоком разрешении.
+        
         print(f"<- Композитинг (OpenCV) успешно завершен. Финальное разрешение: {final_image.shape[1]}x{final_image.shape[0]}")
-
-        # Сохраняем результат в формате PNG, который поддерживает прозрачность
+        
         _, image_data_encoded = cv2.imencode('.png', final_image)
         image_data = io.BytesIO(image_data_encoded)
         image_data.seek(0)
-
+        
         return image_data
 
     except Exception as e:
@@ -176,14 +196,14 @@ def process_job(job_data, db_session):
         
         if original_width <= 2048: # 2K и меньше
             scale_factor = 2.0
-            creativity = 0.60
+            creativity = 0.40
             resemblance = 1.20
             hdr = 3 # <--- ИСПРАВЛЕНО
             num_inference_steps = 40
         elif original_width <= 4096: # 4K
             scale_factor = 4.0
-            creativity = 0.40
-            resemblance = 1.20
+            creativity = 0.30
+            resemblance = 1.50
             hdr = 3 # <--- ИСПРАВЛЕНО
             num_inference_steps = 60
         else: # 6K и больше

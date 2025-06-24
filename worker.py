@@ -116,7 +116,7 @@ def composite_images(original_url, upscaled_url, mask_url):
         mask_resized = cv2.resize(mask_img_gray, (w, h), interpolation=cv2.INTER_NEAREST)
         expanded_mask = cv2.dilate(mask_resized, kernel, iterations=1)
 
-        blur_size = int(expand_size * 0.2)
+        blur_size = int(expand_size * 0.5)
         blur_size = blur_size if blur_size % 2 != 0 else blur_size + 1
         soft_mask = cv2.GaussianBlur(expanded_mask, (blur_size, blur_size), 0)
 
@@ -176,22 +176,22 @@ def process_job(job_data, db_session):
         
         if original_width <= 2048: # 2K и меньше
             scale_factor = 2.0
-            creativity = 0.40
+            creativity = 0.60
             resemblance = 1.20
-            hdr = 2 # <--- ИСПРАВЛЕНО
+            hdr = 3 # <--- ИСПРАВЛЕНО
             num_inference_steps = 40
         elif original_width <= 4096: # 4K
             scale_factor = 4.0
             creativity = 0.40
             resemblance = 1.20
-            hdr = 2 # <--- ИСПРАВЛЕНО
-            num_inference_steps = 40
+            hdr = 3 # <--- ИСПРАВЛЕНО
+            num_inference_steps = 60
         else: # 6K и больше
             scale_factor = 4.0
             creativity = 0.30
             resemblance = 1.50
-            hdr = 1 # <--- ИСПРАВЛЕНО
-            num_inference_steps = 40
+            hdr = 3 # <--- ИСПРАВЛЕНО
+            num_inference_steps = 60
             
         upscaler_input = {
             "image": generated_image_url,

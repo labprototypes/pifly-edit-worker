@@ -1,6 +1,6 @@
 # worker.py - ФИНАЛЬНАЯ ВЕРСИЯ
 
-import os, time, json, requests, io, traceback, uuid, redis, boto3, httpx
+import os, time, json, requests, io, traceback, uuid, redis, boto3
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import sessionmaker
@@ -30,7 +30,7 @@ replicate_http_client = httpx.Client(
 # Инициализируем клиент Replicate с нашими настройками таймаута
 replicate_client = replicate.Client(
     api_token=REPLICATE_API_TOKEN,
-    http_client=replicate_http_client
+    timeout=180.0  # Устанавливаем таймаут 180 секунд для всех запросов
 )
 # --- КОНЕЦ НОВОГО БЛОКА ---
 

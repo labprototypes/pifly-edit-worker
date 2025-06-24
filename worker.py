@@ -80,29 +80,30 @@ def composite_images(original_url, upscaled_url, mask_url):
         upscaled_img = Image.open(requests.get(upscaled_url, stream=True).raw).convert("RGBA")
         mask_img = Image.open(requests.get(mask_url, stream=True).raw).convert("L")
 
+         # --- НОВЫЙ БЛОК: Ограничение разрешения для стабильности ---
+        if max(upscaled_img.size) > MAX_RESOLUTION:
+            print(f"   -> Изображение слишком большое ({upscaled_img.size}). Ограничиваем до {MAX_RESOLUTION}px.")
+            upscaled_img.thumbnail((MAX_RESOLUTION, MAX_RESOLUTION), Image.LANCZOS)
+            print(f"   -> Новый размер для композитинга: {upscaled_img.size}")
+        # --- КОНЕЦ НОВОГО БЛОКА ---
+
         # --- Блок продвинутой обработки маски ---
-        expand_size = int(mask_img.width * 0.05)
+        expand_size = int(mask_img.width * 0.02)
         expand_size = expand_size if expand_size % 2 != 0 else expand_size + 1
         print(f"   -> Расширяем маску на ~{expand_size} пикселей...")
         expanded_mask = mask_img.filter(ImageFilter.MaxFilter(size=expand_size))
 
-        blur_radius = int(expand_size * 0.05)
+        blur_radius = int(expand_size * 0.02)
         print(f"   -> Растушевываем края маски с радиусом: {blur_radius}")
         soft_mask = expanded_mask.filter(ImageFilter.GaussianBlur(radius=blur_radius))
         # --- Конец блока ---
 
         # --- КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Приводим все слои к одному размеру ---
         print(f"   -> Изменение размера слоев до {upscaled_img.size} для композитинга...")
-        # 1. Изменяем размер маски до размера увеличенного изображения
         high_res_mask = soft_mask.resize(upscaled_img.size, Image.LANCZOS)
-        # 2. Изменяем размер ОРИГИНАЛА до размера увеличенного изображения
         high_res_original = original_img.resize(upscaled_img.size, Image.LANCZOS)
-
-        # Теперь все три изображения (upscaled_img, high_res_original, high_res_mask) имеют одинаковый размер.
-        # 3. Производим композитинг в высоком разрешении
         high_res_final = Image.composite(upscaled_img, high_res_original, high_res_mask)
 
-        # 4. Возвращаем финальное изображение к исходному размеру оригинала
         print(f"   -> Возвращаем финальное изображение к исходному размеру {original_img.size}...")
         final_image = high_res_final.resize(original_img.size, Image.LANCZOS)
 
@@ -113,7 +114,7 @@ def composite_images(original_url, upscaled_url, mask_url):
         print("<- Композитинг успешно завершен.")
         return image_data
     except Exception as e:
-        traceback.print_exc() # Добавляем полный трейсбек для лучшей диагностики
+        traceback.print_exc()
         raise Exception(f"Ошибка на этапе композитинга: {e}")
 
 def upload_to_s3(image_data, user_id, prediction_id):
@@ -156,7 +157,7 @@ def process_job(job_data, db_session):
             resemblance = 1.20
             hdr = 2 # <--- ИСПРАВЛЕНО
         else: # 6K и больше
-            scale_factor = 6.0
+            scale_factor = 4.0
             creativity = 0.30
             resemblance = 1.50
             hdr = 1 # <--- ИСПРАВЛЕНО

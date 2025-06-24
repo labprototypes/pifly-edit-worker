@@ -5,3 +5,4 @@ Pillow
 boto3
 Flask-SQLAlchemy
 psycopg2-binary
+httpx

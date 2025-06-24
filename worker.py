@@ -1,6 +1,6 @@
 # worker.py - ФИНАЛЬНАЯ ВЕРСИЯ
 
-import os, time, json, requests, io, traceback, uuid, redis, boto3
+import os, time, json, requests, io, traceback, uuid, redis, boto3, httpx
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy.orm import sessionmaker
@@ -19,6 +19,20 @@ AWS_S3_REGION = os.environ.get('AWS_S3_REGION')
 FLUX_MODEL_VERSION = "black-forest-labs/flux-kontext-max:0b9c317b23e79a9a0d8b9602ff4d04030d433055927fb7c4b91c44234a6818c4"
 SAM_MODEL_VERSION = "tmappdev/lang-segment-anything:891411c38a6ed2d44c004b7b9e44217df7a5b07848f29ddefd2e28bc7cbf93bc"
 UPSCALER_MODEL_VERSION = "philz1337x/clarity-upscaler:dfad41707589d68ecdccd1dfa600d55a208f9310748e44bfe35b4a6291453d5e"
+
+# Создаем кастомный HTTP-клиент с жестким таймаутом в 30 секунд
+custom_transport = httpx.HTTPTransport(retries=3)
+replicate_http_client = httpx.Client(
+    transport=custom_transport,
+    timeout=30.0 
+)
+
+# Инициализируем клиент Replicate с нашими настройками таймаута
+replicate_client = replicate.Client(
+    api_token=REPLICATE_API_TOKEN,
+    http_client=replicate_http_client
+)
+# --- КОНЕЦ НОВОГО БЛОКА ---
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL
@@ -39,41 +53,34 @@ class Prediction(db.Model):
 # --- ВСТАВЬТЕ ЭТОТ КОД НА МЕСТО СТАРОЙ ФУНКЦИИ run_replicate_model ---
 
 def run_replicate_model(version, input_data, description):
-    """Запускает модель и активно опрашивает ее статус самым надежным способом (через get)."""
+    """Запускает модель через клиент с настроенным таймаутом и надежно опрашивает статус."""
     print(f"-> Запуск модели '{description}'...")
-    # Шаг 1: Создаем предсказание
-    prediction = replicate.predictions.create(version=version, input=input_data)
+    # Используем наш новый клиент replicate_client
+    prediction = replicate_client.predictions.create(version=version, input=input_data)
     print(f"   -> Replicate задача создана с ID: {prediction.id}")
 
     start_time = time.time()
-    timeout = 600  # 10 минут
+    timeout = 600
 
-    # Шаг 2: Входим в цикл ожидания
     while True:
-        # --- НОВЫЙ БЛОК: Запрашиваем предсказание с нуля по ID ---
         try:
             print(f"   -> Запрос актуального статуса для '{description}' (ID: {prediction.id})...")
-            # Вместо .reload() используем .get() для максимальной надежности
-            prediction = replicate.predictions.get(prediction.id)
+            # Используем наш новый клиент replicate_client
+            prediction = replicate_client.predictions.get(prediction.id)
             print(f"   -> Статус получен: {prediction.status}")
         except Exception as e:
             print(f"   -> !!! ВНИМАНИЕ: Ошибка при получении статуса для '{description}': {e}. Повторная попытка...")
-            time.sleep(5) # В случае ошибки ждем чуть дольше
+            time.sleep(5)
             continue
-        # --- КОНЕЦ НОВОГО БЛОКА ---
 
-        # Шаг 3: Проверяем, завершена ли задача
         if prediction.status in ["succeeded", "failed", "canceled"]:
-            break  # Выходим из цикла, если получен финальный статус
+            break
 
-        # Шаг 4: Проверяем общий таймаут
         if time.time() - start_time > timeout:
             raise Exception(f"Модель '{description}' не завершилась за {timeout} секунд (таймаут).")
 
-        # Шаг 5: Ждем перед следующей проверкой
         time.sleep(3)
 
-    # Шаг 6: Обрабатываем финальный результат
     if prediction.status != 'succeeded':
         raise Exception(f"Модель '{description}' не удалась со статусом {prediction.status}. Ошибка: {prediction.error}")
 

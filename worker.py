@@ -5,6 +5,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageFilter
 import replicate
+import requests
+import traceback
 
 # Импорты для автономной работы с БД
 from sqlalchemy import create_engine, Column, String, Integer
@@ -19,6 +21,7 @@ AWS_ACCESS_KEY_ID = os.environ.get('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
 AWS_S3_BUCKET_NAME = os.environ.get('AWS_S3_BUCKET_NAME')
 AWS_S3_REGION = os.environ.get('AWS_S3_REGION')
+WORKER_SECRET_KEY = os.environ.get('WORKER_SECRET_KEY')
 
 # Модели Replicate
 FLUX_MODEL_VERSION = "black-forest-labs/flux-kontext-max:0b9c317b23e79a9a0d8b9602ff4d04030d433055927fb7c4b91c44234a6818c4"
@@ -199,9 +202,18 @@ def upload_to_s3(image_data, user_id, prediction_id):
     return permanent_s3_url
 
 def process_job(job_data):
-    prediction_id = job_data['prediction_id']
-    print(f"--- Начало обработки задачи {prediction_id} ---")
-    db_session = get_db_session()
+    prediction_id = job_data.get('prediction_id')
+    app_base_url = job_data.get('app_base_url')
+
+    print(f"--- Начало обработки задачи {prediction_id} от {app_base_url} ---")
+
+    final_payload = {"prediction_id": prediction_id}
+    if not app_base_url:
+        print(f"!!! КРИТИЧЕСКАЯ ОШИБКА: app_base_url не передан в задаче {prediction_id}")
+        return
+
+    webhook_url = f"{app_base_url}/worker-webhook"
+    headers = {"Authorization": f"Bearer {WORKER_SECRET_KEY}", "Content-Type": "application/json"}
     try:
         flux_output = run_replicate_model(FLUX_MODEL_VERSION, {"input_image": job_data['original_s3_url'], "prompt": job_data['generation_prompt']}, "FLUX Edit")
         generated_image_url = flux_output[0] if isinstance(flux_output, list) else flux_output
@@ -231,29 +243,21 @@ def process_job(job_data):
         upscaled_output = run_replicate_model(UPSCALER_MODEL_VERSION, upscaler_input, "Upscaler")
         upscaled_image_url = upscaled_output[0] if isinstance(upscaled_output, list) else upscaled_output
         
-        final_image_data = composite_images(job_data['original_s3_url'], upscaled_image_url, mask_url)
-        final_s3_url = upload_to_s3(final_image_data, job_data['user_id'], prediction_id)
+        final_payload['status'] = 'completed'
+        final_payload['final_url'] = final_s3_url
+        print(f"--- Задача {prediction_id} УСПЕШНО ЗАВЕРШЕНА! Отправка результата в app...")
 
-        prediction = db_session.get(Prediction, prediction_id)
-        if prediction:
-            prediction.status = 'completed'
-            prediction.output_url = final_s3_url
-            db_session.commit()
-            print(f"--- ПОЛНАЯ ЗАДАЧА {prediction_id} УСПЕШНО ЗАВЕРШЕНА! ---")
     except Exception as e:
         print(f"!!! ОШИБКА при обработке задачи {prediction_id}:")
         traceback.print_exc()
-        db_session.rollback()
-        prediction = db_session.get(Prediction, prediction_id)
-        if prediction:
-            prediction.status = 'failed'
-            user = db_session.get(User, prediction.user_id)
-            if user:
-                user.token_balance += prediction.token_cost
-                print(f"Возвращено {prediction.token_cost} токенов пользователю {user.id}")
-            db_session.commit()
+        final_payload['status'] = 'failed'
+
     finally:
-        db_session.close()
+        try:
+            requests.post(webhook_url, json=final_payload, headers=headers, timeout=20)
+            print(f"--- Результат для задачи {prediction_id} отправлен в {webhook_url} ---")
+        except Exception as e:
+            print(f"!!! КРИТИЧЕСКАЯ ОШИБКА: Не удалось отправить вебхук в app для задачи {prediction_id}: {e}")
 
 def main_loop():
     print(">>> Воркер PiflyEdit запущен и ожидает задач...")

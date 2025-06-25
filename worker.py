@@ -30,15 +30,9 @@ replicate_client = replicate.Client(api_token=REPLICATE_API_TOKEN, timeout=180.0
 # Создание независимого подключения к БД
 engine = create_engine(
     DATABASE_URL,
-    pool_pre_ping=True,      # Проверять соединение перед каждым запросом
-    pool_recycle=280,        # Пересоздавать соединение каждые 280 секунд
-    pool_timeout=30,         # Таймаут ожидания свободного соединения
-    connect_args={
-        'keepalives': 1,
-        'keepalives_idle': 30,
-        'keepalives_interval': 10,
-        'keepalives_count': 5
-    } # Дополнительные TCP keep-alive параметры для стабильности
+    pool_pre_ping=True,
+    pool_recycle=280,
+    connect_args={"connect_timeout": 60} # <--- ВОТ ЭТО ГЛАВНОЕ ИЗМЕНЕНИЕ
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()

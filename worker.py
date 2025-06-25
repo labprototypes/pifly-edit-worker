@@ -28,23 +28,50 @@ UPSCALER_MODEL_VERSION = "philz1337x/clarity-upscaler:dfad41707589d68ecdccd1dfa6
 replicate_client = replicate.Client(api_token=REPLICATE_API_TOKEN, timeout=180.0)
 
 # Создание независимого подключения к БД
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,      # Проверять соединение перед каждым запросом
+    pool_recycle=280,        # Пересоздавать соединение каждые 280 секунд
+    pool_timeout=30,         # Таймаут ожидания свободного соединения
+    connect_args={
+        'keepalives': 1,
+        'keepalives_idle': 30,
+        'keepalives_interval': 10,
+        'keepalives_count': 5
+    } # Дополнительные TCP keep-alive параметры для стабильности
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 # Определение моделей БД прямо в файле для автономности
 class User(Base):
     __tablename__ = 'user'
-    id = Column(String(128), primary_key=True)
-    token_balance = Column(Integer, nullable=False)
+    id = Column(String(36), primary_key=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    username = Column(String(255), nullable=True)
+    password_hash = Column(String(255), nullable=False)
+    email_confirmed = Column(String(1), nullable=False, default='0') # Используем String для совместимости
+    email_confirmed_at = Column(String(100), nullable=True) # Используем String для совместимости
+    yandex_id = Column(String(255), unique=True, nullable=True)
+    token_balance = Column(Integer, default=100, nullable=False)
+    marketing_consent = Column(String(1), nullable=False, default='1') # Используем String для совместимости
+    subscription_status = Column(String(50), default='free', nullable=False)
+    stripe_customer_id = Column(String(255), nullable=True, unique=True)
+    stripe_subscription_id = Column(String(255), nullable=True, unique=True)
+    current_plan = Column(String(50), nullable=True, default='free')
+    trial_used = Column(String(1), default='0', nullable=False) # Используем String для совместимости
+    subscription_ends_at = Column(String(100), nullable=True) # Используем String для совместимости
+
 
 class Prediction(Base):
     __tablename__ = 'prediction'
     id = Column(String(36), primary_key=True)
-    user_id = Column(String(128), nullable=False)
+    user_id = Column(String(36), nullable=False) # ИСПРАВЛЕНО: было String(128)
+    replicate_id = Column(String(255), unique=True, nullable=True, index=True)
     status = Column(String(50), nullable=False)
     output_url = Column(String(2048), nullable=True)
-    token_cost = Column(Integer, nullable=False)
+    created_at = Column(String(100), nullable=True) # Используем String для совместимости
+    token_cost = Column(Integer, nullable=False, default=1)
 
 def get_db_session():
     """Создает и возвращает новую сессию БД."""
@@ -226,7 +253,7 @@ def process_job(job_data):
         prediction = db_session.get(Prediction, prediction_id)
         if prediction:
             prediction.status = 'failed'
-            user = db_session.get(User, prediction.id)
+            user = db_session.get(User, prediction.user_id)
             if user:
                 user.token_balance += prediction.token_cost
                 print(f"Возвращено {prediction.token_cost} токенов пользователю {user.id}")

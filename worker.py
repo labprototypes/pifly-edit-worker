@@ -201,7 +201,14 @@ def upload_to_s3(image_data, user_id, prediction_id):
 def process_job(job_data):
     prediction_id = job_data['prediction_id']
     print(f"--- Начало обработки задачи {prediction_id} ---")
-    db_session = get_db_session()
+
+    # Готовим данные для отправки в app.py
+    final_payload = { "prediction_id": prediction_id }
+    webhook_url = f"{APP_BASE_URL}/worker-webhook"
+    headers = {
+        "Authorization": f"Bearer {WORKER_SECRET_KEY}",
+        "Content-Type": "application/json"
+    }
     try:
         flux_output = run_replicate_model(FLUX_MODEL_VERSION, {"input_image": job_data['original_s3_url'], "prompt": job_data['generation_prompt']}, "FLUX Edit")
         generated_image_url = flux_output[0] if isinstance(flux_output, list) else flux_output
@@ -234,39 +241,28 @@ def process_job(job_data):
         final_image_data = composite_images(job_data['original_s3_url'], upscaled_image_url, mask_url)
         final_s3_url = upload_to_s3(final_image_data, job_data['user_id'], prediction_id)
 
-        prediction = db_session.get(Prediction, prediction_id)
-        if prediction:
-            prediction.status = 'completed'
-            prediction.output_url = final_s3_url
-            db_session.commit()
-            print(f"--- ПОЛНАЯ ЗАДАЧА {prediction_id} УСПЕШНО ЗАВЕРШЕНА! ---")
+        # Если все прошло успешно, готовим payload со статусом 'completed'
+        final_payload['status'] = 'completed'
+        final_payload['final_url'] = final_s3_url
+        print(f"--- Задача {prediction_id} УСПЕШНО ЗАВЕРШЕНА! Отправка результата в app...")
+
     except Exception as e:
+        # Если произошла ошибка, готовим payload со статусом 'failed'
         print(f"!!! ОШИБКА при обработке задачи {prediction_id}:")
         traceback.print_exc()
-        db_session.rollback()
-        prediction = db_session.get(Prediction, prediction_id)
-        if prediction:
-            prediction.status = 'failed'
-            user = db_session.get(User, prediction.user_id)
-            if user:
-                user.token_balance += prediction.token_cost
-                print(f"Возвращено {prediction.token_cost} токенов пользователю {user.id}")
-            db_session.commit()
-    finally:
-        db_session.close()
+        final_payload['status'] = 'failed'
 
-def main_loop():
-    print(">>> Воркер PiflyEdit запущен и ожидает задач...")
-    redis_client = redis.from_url(REDIS_URL)
-    while True:
+    finally:
+        # В любом случае (успех или провал) отправляем результат в основное приложение
+        if not APP_BASE_URL or not WORKER_SECRET_KEY:
+            print("!!! КРИТИЧЕСКАЯ ОШИБКА: APP_BASE_URL или WORKER_SECRET_KEY не установлены. Не могу отправить вебхук.")
+            return
+
         try:
-            _, job_json = redis_client.brpop('pifly_edit_jobs', 0)
-            job_data = json.loads(job_json)
-            print(f"--- WORKER: Получена новая задача: {job_data.get('prediction_id')} ---")
-            process_job(job_data)
+            requests.post(webhook_url, json=final_payload, headers=headers, timeout=20)
+            print(f"--- Результат для задачи {prediction_id} отправлен в app. ---")
         except Exception as e:
-            print(f"!!! КРИТИЧЕСКАЯ ОШИБКА в основном цикле воркера: {e}")
-            time.sleep(10)
+            print(f"!!! КРИТИЧЕСКАЯ ОШИБКА: Не удалось отправить вебхук в app для задачи {prediction_id}: {e}")
 
 if __name__ == "__main__":
     main_loop()

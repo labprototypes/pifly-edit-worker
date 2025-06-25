@@ -212,7 +212,7 @@ def process_job(job_data):
         print(f"!!! КРИТИЧЕСКАЯ ОШИБКА: app_base_url не передан в задаче {prediction_id}")
         return
 
-    webhook_url = f"{app_base_url}/worker-webhook"
+    webhook_url = f"{app_base_url.rstrip('/')}/worker-webhook"
     headers = {"Authorization": f"Bearer {WORKER_SECRET_KEY}", "Content-Type": "application/json"}
     try:
         flux_output = run_replicate_model(FLUX_MODEL_VERSION, {"input_image": job_data['original_s3_url'], "prompt": job_data['generation_prompt']}, "FLUX Edit")

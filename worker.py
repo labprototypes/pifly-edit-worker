@@ -242,6 +242,9 @@ def process_job(job_data):
         upscaler_input = { "image": generated_image_url, "scale_factor": scale_factor, "creativity": creativity, "resemblance": resemblance, "num_inference_steps": num_inference_steps, "dynamic": hdr }
         upscaled_output = run_replicate_model(UPSCALER_MODEL_VERSION, upscaler_input, "Upscaler")
         upscaled_image_url = upscaled_output[0] if isinstance(upscaled_output, list) else upscaled_output
+
+        final_image_data = composite_images(job_data['original_s3_url'], upscaled_image_url, mask_url)
+        final_s3_url = upload_to_s3(final_image_data, job_data['user_id'], prediction_id)
         
         final_payload['status'] = 'completed'
         final_payload['final_url'] = final_s3_url
